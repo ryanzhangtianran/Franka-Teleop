@@ -1,7 +1,7 @@
 import yaml
 from pathlib import Path
 from typing import Dict, Any
-from franka_interface import FrankaConfig, Franka
+from interface import FrankaConfig, Franka
 import logging
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -12,9 +12,10 @@ def main():
     with open(cfg_path, 'r') as f:
         cfg = yaml.safe_load(f)
 
-    # 创建机器人配置
+    # 创建机器人配置(zerorpc 服务地址从配置读,默认 NUC 192.168.50.10;
+    # 写死 127.0.0.1 只在 NUC 本机能用,在 Franka-Server 上会连不上)
     robot_config = FrankaConfig(
-        robot_ip="127.0.0.1",
+        robot_ip=cfg["record"]["robot"]["ip"],
         use_gripper=cfg["record"]["robot"]["use_gripper"],
         close_threshold=cfg["record"]["robot"]["close_threshold"],
         gripper_bin_threshold=cfg["record"]["robot"]["gripper_bin_threshold"],

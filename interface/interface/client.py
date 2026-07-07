@@ -1,6 +1,6 @@
 '''
 running on the user machine 
-to connect to the franka_interface_server 
+to connect to the server
 '''
 import logging
 import numpy as np

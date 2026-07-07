@@ -14,21 +14,76 @@ Now we support the end-effector pose control using [SpaceMouse](https://3dconnex
 
  The SpaceMouse is a 6-axis input device that can be used to control the end pose of the robot. The left button is used to open the gripper, and the right button is used to close the gripper.
 
-### Support 2
+## Quick Start — 本机使用说明(SpaceMouse 采数)
 
-Now we support the end-effector pose control using Oculus Quest 3/3s devices.
+> 本节是当前部署机器的日常操作速查(环境已于 2026-06-12 搭建并全链路验证)。首次部署或换机器请从第 0 节开始。
 
-<p align="center">
-  <img src="assets/quest3s.jpg" alt="Oculus Quest" width="600">
-  <br>
-</p>
+### 本机环境一览
 
-The Oculus Quest controller provides 6-DoF tracking for intuitive end-effector control. The right controller is used for robot manipulation with the following controls:
+| 项目 | 值 |
+|---|---|
+| conda 环境 | `franka`(Python 3.10,lerobot 0.3.4 Orbbec fork + franka_teleop) |
+| NUC(机器人主机) | `192.168.50.10`,运行 Polymetis + `server.py`(zerorpc 端口 4242) |
+| 外部相机 | Orbbec Gemini 336L,序列号 `CPC936300041` |
+| 腕部相机 | Orbbec Gemini 336L,序列号 `CPC93630001C` |
+| 遥操作设备 | 3Dconnexion SpaceMouse Compact |
+| 数据集存储 | `~/.cache/huggingface/lerobot/<repo_id>_<日期>_<版本>` |
 
-- **RG (Right Grip)**: Must be pressed to enable robot movement
-- **RTr (Right Trigger)**: Controls gripper (press to close, release to open)
-- **A Button**: Request robot reset
-- **Right controller pose**: Controls end-effector delta pose
+### 采数前准备(每次)
+
+1. **NUC 端**:依次启动 Polymetis 三件套和 zerorpc 桥接(见第 0.2 节):
+   `launch_robot.py` → `launch_gripper.py` → `launch_server.py` → `server.py`
+2. **机器人**:上电、急停释放、关节解锁,在 Franka Desk 中激活 **FCI**。
+3. **本机**:编辑 `scripts/config/record_cfg.yaml`,设置本次任务:
+   - `repo_id`:按第 9 节命名规范(`<user>/<Verb_Object_prep_Target>`)
+   - `task.description`:任务的自然语言描述(训练时作为 language instruction)
+   - `task.num_episodes`:本次计划录制条数
+
+### 启动采集
+
+```bash
+/data2/franka/franka_teleop/scripts/start_record.sh          # 预检(5项)通过后自动进入录制
+/data2/franka/franka_teleop/scripts/start_record.sh --check  # 只做预检不启动
+```
+
+脚本自动完成:激活 conda 环境 → 挂载图形会话(`DISPLAY=:2`,rerun 画面显示在物理屏幕)→ 预检 NUC/SpaceMouse/相机/机械臂 → 启动 `franka-record`。
+**必须在能交互的终端里运行**(SSH 或物理机均可),回合间复位需要在该终端按 Enter。
+
+### 操作方法
+
+| 操作 | 效果 |
+|---|---|
+| 推/转 SpaceMouse | 控制末端 6 自由度。**注意:存在动作死区,推杆需过半行程机械臂才响应**(轻推会被静默忽略,属设计行为) |
+| SpaceMouse 左键 | 打开夹爪 |
+| SpaceMouse 右键 | 闭合夹爪 |
+| **→** 右方向键(第 1 次) | 结束当前 episode 并保存,程序暂停 |
+| **→**(第 2 次) | 机械臂自动回 Home 复位(期间可摆放物体) |
+| **→**(第 3 次) | 结束复位,开始录下一条 |
+| **←** 左方向键 | 放弃并重录当前 episode |
+| **Esc** | 结束会话,保存全部已录数据 |
+| Ctrl+C / 异常 | 进入清理流程,询问是否删除不完整数据集(误删可在回收站找回) |
+
+> 所有按键都在**物理机键盘**上按(全局监听),录数据全程无需回到启动终端。
+
+### 录完之后
+
+```bash
+# 回放 / 可视化(先在 record_cfg.yaml 的 replay/visualize 段填入实际数据集名,含日期版本后缀)
+franka-replay
+franka-visualize
+tools-check-dataset   # 手动删过数据集后,刷新 dataset_info.txt
+```
+
+### 常见问题速查
+
+| 现象 | 原因与处理 |
+|---|---|
+| 推 SpaceMouse 机械臂不动 | ① 推力不够:死区要求推杆过半(见上表);② 看终端日志有无 `[ROBOT] zerorpc error`(执行失败会被吞成 warning,表面无异常);③ 跑 `start_record.sh --check` 复查链路 |
+| 预检报 NUC 不可达 | NUC 上四个服务没起全;本机验证:`nc -z 192.168.50.10 4242` |
+| 外部相机枚举时报 `libusb ... timed out` | 该相机在 USB2 口,告警无害(15fps 实测不掉帧);介意可换到 USB3 口 |
+| 提示 X display 不可用 | 物理机图形会话(`:2`)不在了,需有人在物理机登录 franka 用户;或改用 VNC |
+| 给环境装新包后各种报错 | 大概率 numpy 被降级。本环境必须保持 `numpy==2.2.6`/`av==15.x`,严禁安装 open3d(详见维护者) |
+| 远程操作 | 笔记本上 `ssh -L 5900:localhost:5900 franka@<本机>`,本机 `x11vnc -display :2 -auth /run/user/1007/gdm/Xauthority -localhost -nopw`,VNC 连 `localhost:5900` |
 
 ## 0. Franka Control via Polymetis
 
@@ -219,8 +274,8 @@ lerobot-edit-dataset
 
 - **Right Arrow Key**  
    1. Press the right arrow key: end the current episode and save the data. The program will pause.  
-   2. Enter the **reset** phase: press enter key to continue, then return the robot to its initial position.  
-   3. Press the right arrow key again to start recording the next episode.
+   2. Press the right arrow key again to enter the **reset** phase: the robot returns to its initial position.  
+   3. Press the right arrow key once more to finish the reset and start recording the next episode.
 
 - **Left Arrow Key**  
    - Press to restart the current episode recording (overwrite the current data).

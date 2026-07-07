@@ -15,8 +15,8 @@ setup(
     include_package_data=True,
     install_requires=[
         "send2trash",
-        f"franka_interface @ {(ROOT / 'franka_interface').as_uri()}",
-        f"franka_teleoperation @ {(ROOT / 'franka_teleoperation').as_uri()}",
+        f"interface @ {(ROOT / 'interface').as_uri()}",
+        f"teleoperation @ {(ROOT / 'teleoperation').as_uri()}",
     ],
     scripts=[
         "scripts/tools/map_gripper.sh",

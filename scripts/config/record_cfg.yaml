@@ -1,58 +1,30 @@
 record:
-  repo_id: &repo_id "rlco/pick_carrot_into_yellow_tray_episode_100" 
+  repo_id: &repo_id "reponame/pick_place"
   debug: 0 # if True, robot will not execute any actions, but gripper can still be controlled
   user_notes:  # any additional notes about the dataset
   fps: 15 # dataset and camera frame rate
   dataset_schema_config: "dataset_schema_legacy.yaml"
-  control_mode: &control_mode "spacemouse" # "spacemouse" or "oculus"
+  control_mode: &control_mode "spacemouse" # "spacemouse"
   run_mode: "run_record" # "run_record" or "run_policy" or "run_mix"
 
   teleop:
-    control_mode: *control_mode 
+    control_mode: *control_mode
+    use_gripper: &use_gripper True # shared gripper toggle (anchor referenced below)
     spacemouse_config:
       channel_ids: [0, 1, 2, 3, 4, 5]
       channel_signs: [-1, -1, 1, -1, -1, 1]
       use_gripper: *use_gripper # whether the spacemouse robot can use gripper
       pose_scaler: [0.02, 0.08] # scaler for spacemouse actions [position, attitude]
-    oculus_config:
-      ip: "192.168.110.62"  # Oculus Quest IP address
-      use_gripper: *use_gripper
-      pose_scaler: [3.0, 2.0]  # scaler for oculus actions [position, attitude]
-      channel_signs: [1, 1, 1, -1, -1, 1]  # signs for each axis [x, y, z, rx, ry, rz]
-      # channel_signs: [-1, -1, 1, 1, 1, 1] # mirror
-    placo:
-      visualize_placo: False
-      placo_dt: 0.01
-      # Placo IK settings for oculus joint mode
-      enable_ik: False              # 是否启用 Placo IK 计算关节位置（run_policy 时可设为 False）
-      robot_ip: "192.168.110.15"    # Franka robot IP for reading current joint states
-      robot_port: 4242              # Franka zerorpc port
-      ik_urdf_path: "assets/franka_urdf/fr3v2_no_mesh.urdf"  # No-mesh URDF for IK solver, empty to disable
-      ik_iterations: 30              # IK 求解迭代次数，值越大精度越高但更慢（推荐 8~15）
-      # ── Placo IK 任务权重 ──────────────────────────────────────────────
-      # Placo 将 IK 分解为多个加权"soft"任务，求解器在每次迭代中按权重
-      # 优先满足高权重任务。FR3v2 是 7-DOF 冗余臂，需要在末端精度和
-      # 关节锚定之间取得平衡：
-      #   - pos_weight  较大 → 末端位置跟踪更准，但关节可能偏离当前构型
-      #   - joints_weight 较大 → 关节稳定，但末端可能跟不上（尤其前/后方向）
-      #   - ori_weight  控制姿态跟踪优先级
-      #   - regularization 防止求解器数值奇异，一般无需调整
-      ik_pos_weight: 8.0            # 末端位置跟踪权重（主要任务，建议 5~10）d
-      ik_ori_weight: 3.0            # 末端姿态跟踪权重（建议 0.3~2.0）
-      ik_joints_weight: 0.2         # 关节锚定权重，解决 7-DOF 冗余（建议 0.1~1.0）
-      ik_regularization: 1.0e-4     # 正则化权重，防止数值奇异（一般不调）
-      
+
   robot:
     # ip: &ip "172.16.0.2" # robot ip
-    ip: &ip "127.0.0.1" # Host ip
+    ip: &ip "192.168.50.10" # NUC IP (runs Polymetis + server zerorpc:4242)
     use_gripper: *use_gripper
     close_threshold: 0.7 # threshold to determine gripper open/close
     gripper_bin_threshold: 0.98 # threshold to determine gripper is closed
     # gripper_port: &gripper_port "/dev/franka_left_gripper" # gripper_port
     gripper_reverse: false  # If gripper moves opposite, flip this value
     gripper_max_open: 0.085 # gripper max open width in meters 0.0801 for franka hand, 0.12 for robotiq gripper
-    # Execute mode for oculus control: "ee_pose" (cartesian impedance) or "joint" (joint impedance via Placo IK)
-    execute_mode: "ee_pose"
 
   policy:
     type: "act"  # 策略类型 (act, diffusion)
@@ -61,7 +33,7 @@ record:
     pretrained_path: "/home/deepcybo/lerobot/franka_workspace/outputs/zhonghuai/lajiao_20260318_merged/act_test2/checkpoints/last/pretrained_model"
 
   task:
-    description: "Pick up the object on the table and place it into the yellow tray." # task description
+    description: "Open the top drawer of the three-tier drawer." # task description
     num_episodes: 10 # number of episodes to record
     display: True # Whether to display the data during recording
     resume: False # whether to resume from an existing dataset
@@ -83,7 +55,7 @@ record:
     push_to_hub: False # whether to push the dataset to your huggingface repo after recording
 
 replay:
-  dataset_name: rlco/pick_carrot_into_yellow_tray_episode_100
+  dataset_name: rlco/test_0612_20260612_v01 # 录制时自动生成的实际名称(repo_id+日期+版本)
   episode_idx: 0 # episode index to replay
   robot:
     ip: *ip
@@ -91,6 +63,6 @@ replay:
   control_mode: *control_mode 
 
 visualize:
-  dataset_name: rlco/pick_carrot_into_yellow_tray_episode_100
+  dataset_name: rlco/test_0612_20260612_v01 # 录制时自动生成的实际名称(repo_id+日期+版本)
   episode_index: 0 # episode index to visualize
 

@@ -1,3 +1,4 @@
+import os
 import yaml
 import time
 from pathlib import Path
@@ -11,13 +12,10 @@ from scripts.utils.dataset_schema_utils import (
     load_dataset_schema_config,
     uses_legacy_dataset_schema,
 )
-from franka_interface import FrankaConfig, Franka
-from franka_interface.franka import HOME_JOINT_POSITION
-from franka_teleoperation.config_teleop import (
-    SpacemouseTeleopConfig,
-    OculusTeleopConfig,
-)
-from franka_teleoperation.teleop_factory import create_teleop
+from interface import FrankaConfig, Franka
+from interface.franka import HOME_JOINT_POSITION
+from teleoperation.config_teleop import SpacemouseTeleopConfig
+from teleoperation.spacemouse_teleop import SpacemouseTeleop
 from lerobot.cameras.configs import ColorMode, Cv2Rotation
 from lerobot.cameras.orbbec.configuration_orbbec import OrbbecCameraConfig
 from lerobot.cameras.realsense.camera_realsense import RealSenseCameraConfig
@@ -80,8 +78,7 @@ class RecordConfig:
         self.gripper_reverse: bool = robot["gripper_reverse"]
         self.gripper_bin_threshold: float = robot["gripper_bin_threshold"]
         self.gripper_max_open: float = robot.get("gripper_max_open", 0.08)
-        self.execute_mode: str = robot.get("execute_mode", "ee_pose")  # "ee_pose" or "joint"
-        
+
         # Task config
         self.num_episodes: int = task.get("num_episodes", 1)
         self.display: bool = task.get("display", True)
@@ -93,7 +90,12 @@ class RecordConfig:
         self.episode_time_sec: int = time.get("episode_time_sec", 60)
         self.reset_time_sec: int = time.get("reset_time_sec", 10)
         self.save_mera_period: int = time.get("save_mera_period", 1)
-        
+        # 推迟视频编码: 1=每条录完立即编码(默认,采集中会等); >1(或设很大)=录制全程不编码,
+        # 录完后统一编码,使采集过程不被编码阻塞。环境变量 FRANKA_BATCH_ENCODING 可覆盖。
+        self.batch_encoding_size: int = int(
+            os.environ.get("FRANKA_BATCH_ENCODING", time.get("batch_encoding_size", 1))
+        )
+
         # Cameras config
         self.camera_type: str = cam.get("camera_type", cam.get("type", "realsense")).lower()
         self.wrist_cam_id: str | None = cam.get("wrist_cam_id", cam.get("wrist_cam_serial"))
@@ -111,30 +113,7 @@ class RecordConfig:
             self.use_gripper = sm_cfg["use_gripper"]
             self.pose_scaler = sm_cfg["pose_scaler"]
             self.channel_signs = sm_cfg["channel_signs"]
-        
-        elif self.control_mode == "oculus":
-            oculus_cfg = teleop.get("oculus_config", {})
-            self.use_gripper = oculus_cfg.get("use_gripper", True)
-            self.oculus_ip = oculus_cfg.get("ip", "192.168.110.62")
-            self.pose_scaler = oculus_cfg.get("pose_scaler", [1.0, 1.0])
-            self.channel_signs = oculus_cfg.get("channel_signs", [1, 1, 1, 1, 1, 1])
-            # Placo IK settings (now read from placo section)
-            placo_cfg = teleop.get("placo", {})
-            self.oculus_robot_ip = placo_cfg.get("robot_ip", "192.168.110.15")
-            self.oculus_robot_port = placo_cfg.get("robot_port", 4242)
-            urdf_path = placo_cfg.get("ik_urdf_path", "")
-            # Resolve relative urdf_path to project root.
-            if urdf_path and not Path(urdf_path).is_absolute():
-                project_root = Path(__file__).resolve().parent.parent.parent  # scripts/core/ -> scripts/ -> project root
-                urdf_path = str((project_root / urdf_path).resolve())
-            self.oculus_urdf_path = urdf_path
-            self.oculus_enable_ik = placo_cfg.get("enable_ik", True)
-            self.oculus_ik_iterations = placo_cfg.get("ik_iterations", 3)
-            self.oculus_ik_pos_weight = placo_cfg.get("ik_pos_weight", 8.0)
-            self.oculus_ik_ori_weight = placo_cfg.get("ik_ori_weight", 0.5)
-            self.oculus_ik_joints_weight = placo_cfg.get("ik_joints_weight", 0.2)
-            self.oculus_ik_regularization = placo_cfg.get("ik_regularization", 1e-4)
-        
+
         else:
             raise ValueError(f"Unsupported control mode: {self.control_mode}")
     
@@ -167,28 +146,14 @@ class RecordConfig:
                 pose_scaler=self.pose_scaler,
                 channel_signs=self.channel_signs,
             )
-        elif self.control_mode == "oculus":
-            return OculusTeleopConfig(
-                use_gripper=self.use_gripper,
-                ip=self.oculus_ip,
-                pose_scaler=self.pose_scaler,
-                channel_signs=self.channel_signs,
-                enable_ik=self.oculus_enable_ik,
-                robot_ip=self.oculus_robot_ip,
-                robot_port=self.oculus_robot_port,
-                urdf_path=self.oculus_urdf_path,
-                ik_iterations=self.oculus_ik_iterations,
-                ik_pos_weight=self.oculus_ik_pos_weight,
-                ik_ori_weight=self.oculus_ik_ori_weight,
-                ik_joints_weight=self.oculus_ik_joints_weight,
-                ik_regularization=self.oculus_ik_regularization,
-            )
         else:
             raise ValueError(f"Unsupported control mode: {self.control_mode}")
 
 def handle_incomplete_dataset(dataset_path):
     if dataset_path.exists():
         print(f"====== [WARNING] Detected an incomplete dataset folder: {dataset_path} ======")
+        print("  ▶ 程序异常/中断退出,留下了未完成的数据集")
+        print("  ▶ 请在【启动终端】(不是物理键盘)输入: y=删除(可从回收站找回) | n=保留,稍后手动处理")
         termios.tcflush(sys.stdin, termios.TCIFLUSH)
         ans = input("Do you want to delete it? (y/n): ").strip().lower()
         if ans == "y":
@@ -402,7 +367,6 @@ def run_record(record_cfg: RecordConfig):
             gripper_bin_threshold = record_cfg.gripper_bin_threshold,
             gripper_max_open = record_cfg.gripper_max_open,
             control_mode = record_cfg.control_mode,
-            execute_mode = record_cfg.execute_mode,
         )
         # Initialize the robot
         robot = Franka(robot_config)
@@ -436,7 +400,13 @@ def run_record(record_cfg: RecordConfig):
                 robot_type=robot.name,
                 use_videos=True,
                 image_writer_threads=4,
+                batch_encoding_size=record_cfg.batch_encoding_size,
             )
+            if record_cfg.batch_encoding_size > 1:
+                logging.info(
+                    f"====== [ENCODE] 推迟编码已开启 (batch_encoding_size={record_cfg.batch_encoding_size}):"
+                    f" 录制全程不编码,结束后统一编码 ======"
+                )
         # Set the episode metadata buffer size to 1, so that each episode is saved immediately
         dataset.meta.metadata_buffer_size = record_cfg.save_mera_period
 
@@ -452,7 +422,7 @@ def run_record(record_cfg: RecordConfig):
         # configure the teleop and policy
         if record_cfg.run_mode == "run_record":
             logging.info("====== [INFO] Running in teleoperation mode ======")
-            teleop = create_teleop(teleop_config)
+            teleop = SpacemouseTeleop(teleop_config)
             policy = None
         elif record_cfg.run_mode == "run_policy":
             logging.info("====== [INFO] Running in policy mode ======")
@@ -461,7 +431,7 @@ def run_record(record_cfg: RecordConfig):
         elif record_cfg.run_mode == "run_mix":
             logging.info("====== [INFO] Running in mixed mode ======")
             policy = make_policy(record_cfg.policy, ds_meta=dataset.meta)
-            teleop = create_teleop(teleop_config)
+            teleop = SpacemouseTeleop(teleop_config)
 
         if uses_legacy_dataset_schema(dataset_schema_config) and record_cfg.run_mode != "run_record":
             raise ValueError("Legacy dataset schema currently supports run_record only.")
@@ -484,7 +454,11 @@ def run_record(record_cfg: RecordConfig):
         episode_idx = 0
 
         while episode_idx < record_cfg.num_episodes and not events["stop_recording"]:
+            logging.info("")
             logging.info(f"====== [RECORD] Recording episode {episode_idx + 1} of {record_cfg.num_episodes} ======")
+            logging.info("  ▶ 录制中!你的所有操作和画面正在被记录")
+            logging.info("  ▶ SpaceMouse: 推杆控臂(行程过半才响应) | 左键=开夹爪 | 右键=合夹爪")
+            logging.info("  ▶ 按键(物理键盘): →=完成并保存本条 | ←=录废了,丢弃重录 | Esc=结束整个会话")
             if uses_legacy_dataset_schema(dataset_schema_config):
                 legacy_record_loop(
                     robot=robot,
@@ -518,25 +492,51 @@ def run_record(record_cfg: RecordConfig):
                 )
 
             if events["rerecord_episode"]:
-                logging.info("Re-recording episode")
+                logging.info("====== [RERECORD] 收到 ←:本条数据已丢弃 ======")
                 events["rerecord_episode"] = False
                 events["exit_early"] = False
                 dataset.clear_episode_buffer()
+                # 重录前先复位回 Home(并重开夹爪、同步夹爪状态),避免从上一条结束的乱姿态直接开录
+                if not events["stop_recording"]:
+                    logging.info("====== [RESET] 机械臂正在回 Home 位,请把物体摆回初始位置 ======")
+                    logging.info("  ▶ 摆好后按 → :结束复位并【立即开始重录这一条】,请做好操作准备!")
+                    logging.info("  ▶ 按 Esc 结束会话")
+                    reset_environment_loop(
+                        robot=robot,
+                        events=events,
+                        fps=record_cfg.fps,
+                        control_time_s=record_cfg.reset_time_sec,
+                        display_data=record_cfg.display,
+                    )
                 continue
 
+            logging.info("====== [SAVE] 正在保存并编码视频(下方 Svt[info] 滚动输出是编码器日志,属正常现象)... ======")
             dataset.save_episode()
+            logging.info(f"====== [SAVE] ✅ 第 {episode_idx + 1} 条 episode 已保存 ======")
 
             # Reset the environment if not stopping or re-recording
             if not events["stop_recording"] and (episode_idx < record_cfg.num_episodes - 1 or events["rerecord_episode"]):
-                while True:
-                    termios.tcflush(sys.stdin, termios.TCIFLUSH)
-                    user_input = input("====== [WAIT] Press Enter to reset the environment ======")
-                    if user_input == "":
-                        break  
-                    else:
-                        logging.info("====== [WARNING] Please press only Enter to continue ======")
+                # Wait for the right arrow key (same physical keyboard as episode control),
+                # so the operator never has to switch back to the launch terminal.
+                logging.info("")
+                logging.info("====== [WAIT] 程序已暂停,等待你的指令(此时不在录制,可以休息)======")
+                logging.info("  ▶ 按 → 进入复位:机械臂将自动移回 Home 位(注意:机械臂会运动!)")
+                logging.info("  ▶ 按 Esc 结束会话:保存全部已录数据并退出")
+                events["exit_early"] = False
+                events["rerecord_episode"] = False
+                while not events["exit_early"] and not events["stop_recording"]:
+                    time.sleep(0.05)
+                events["exit_early"] = False
+                events["rerecord_episode"] = False
 
-                logging.info("====== [RESET] Returning robot to the initial position. Press right arrow to skip. ======")
+                if events["stop_recording"]:
+                    logging.info("====== [STOP] 收到 Esc:结束录制会话,开始收尾保存... ======")
+                    break
+
+                logging.info("")
+                logging.info("====== [RESET] 机械臂正在回 Home 位,请趁现在把物体摆回初始位置 ======")
+                logging.info("  ▶ 场景摆好后按 → :结束复位并【立即开始录制下一条】,请做好操作准备!")
+                logging.info("  ▶ 按 Esc 结束会话")
                 reset_environment_loop(
                     robot=robot,
                     events=events,
@@ -548,13 +548,56 @@ def run_record(record_cfg: RecordConfig):
             episode_idx += 1
 
         # Clean up
-        logging.info("Stop recording")
+        logging.info("")
+        logging.info("====== [FINALIZE] 录制结束,正在断开设备并整理数据集(可能需要几十秒,请勿 Ctrl+C)... ======")
         robot.disconnect()
         if teleop is not None:
             teleop.disconnect()
+
+        # 推迟编码模式: 录制全程没编码,这里逐条编码尾批 (start_ep..num_episodes)。
+        # 注意: 不能用 dataset._batch_save_episode_video —— 这版 lerobot 它对"从零编码未编码的 episode"
+        #   会崩(meta.episodes 为 None, 且 _save_episode_video 的 ep0 分支会去读 episodes[-1] 的视频列 -> KeyError)。
+        #   正确做法: meta.episodes 置 None 让 ep0 从 chunk0/file0 干净起步, 逐条调 _save_episode_video
+        #   并自己维护 latest_episode(供后续 episode 拼接), 最后把视频元数据列写回 episodes parquet。
+        # (本流程假设"全部推迟到末尾", 即 batch_encoding_size 大于本次录制条数 -> start_ep==0)
+        if (
+            record_cfg.batch_encoding_size > 1
+            and len(dataset.meta.video_keys) > 0
+            and getattr(dataset, "episodes_since_last_encoding", 0) > 0
+        ):
+            import glob as _glob
+            import pandas as _pd
+            n_pending = dataset.episodes_since_last_encoding
+            start_ep = dataset.num_episodes - n_pending
+            logging.info(
+                f"====== [ENCODE] 统一编码剩余 {n_pending} 条 episode (ep {start_ep}~{dataset.num_episodes - 1}),"
+                f" 这一步耗时取决于条数,请耐心等待、勿 Ctrl+C... ======"
+            )
+            if start_ep == 0:
+                dataset.meta.episodes = None   # 让 ep0 走 chunk0/file0 干净起步
+            dataset.meta.latest_episode = None
+            _rows = {}
+            for _ep in range(start_ep, dataset.num_episodes):
+                _row = {}
+                for _vk in dataset.meta.video_keys:
+                    _row.update(dataset._save_episode_video(_vk, _ep))
+                dataset.meta.latest_episode = {k: [v] for k, v in _row.items()}
+                _row.pop("episode_index", None)
+                _rows[_ep] = _row
+                logging.info(f"  [ENCODE] ep {_ep} ✅")
+            _ep_path = _glob.glob(str(dataset.root / "meta/episodes/**/*.parquet"), recursive=True)[0]
+            _ep_df = _pd.read_parquet(_ep_path)
+            _vid_df = _pd.DataFrame.from_dict(_rows, orient="index")
+            _vid_df.index = _vid_df.index.astype(_ep_df.index.dtype)
+            _ep_df = _ep_df.combine_first(_vid_df)
+            _ep_df.to_parquet(_ep_path)
+            dataset.episodes_since_last_encoding = 0
+            logging.info("====== [ENCODE] ✅ 全部视频编码完成 ======")
+
         dataset.finalize()
 
         update_dataset_info(record_cfg, dataset_name, data_version)
+        logging.info(f"====== [DONE] ✅ 全部完成!数据集保存在: {HF_LEROBOT_HOME / dataset_name} ======")
         if record_cfg.push_to_hub:
             dataset.push_to_hub()
 
@@ -574,9 +617,16 @@ def run_record(record_cfg: RecordConfig):
 
 def main():
     parent_path = Path(__file__).resolve().parent
-    cfg_path = parent_path.parent / "config" / "record_cfg.yaml"
+    # 默认 record_cfg.yaml; 可用 FRANKA_RECORD_CFG 指定别的配置(如 test 配置)
+    cfg_path = os.environ.get("FRANKA_RECORD_CFG") or (parent_path.parent / "config" / "record_cfg.yaml")
+    print(f"[CFG] using {cfg_path}")
     with open(cfg_path, 'r') as f:
         cfg = yaml.safe_load(f)
+
+    # 允许用环境变量覆盖录制条数(start_record.sh 的 --single / --episodes N 会设置它)
+    n_override = os.environ.get("FRANKA_NUM_EPISODES")
+    if n_override:
+        cfg["record"]["task"]["num_episodes"] = int(n_override)
 
     record_cfg = RecordConfig(cfg["record"])
     run_record(record_cfg)
