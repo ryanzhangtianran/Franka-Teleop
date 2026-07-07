@@ -1,7 +1,7 @@
 # Franka Teleoperation Data Collection with Isomorphic Joint Mapping and End-Effector Pose
 
 ## Introduction 
-This project is a teleoperation data collection tool for Franka Research 3 robot (should compatible with Franka Panda), embeded in [LeRobot](https://github.com/huggingface/lerobot.git).
+This project is a teleoperation data collection tool for Franka Research 3 robot, embeded in [LeRobot](https://github.com/huggingface/lerobot.git).
 
 ### Support
 
@@ -141,31 +141,26 @@ And run `sudo pkill -9 run_server` after launching the robot.
 ## 1. Environment Setup
 ### 1.1 Create and Activate Conda Environment
 ```bash
-conda create -n franka python=3.10
+conda create -n franka python=3.12
 conda activate franka
 ```
 
 ### 1.2 Install lerobot
 ```bash
-# Install specific version 0.3.4
-# git checkout da5d2f3e9187fa4690e6667fe8b294cae49016d6
 git clone https://github.com/huggingface/lerobot.git
 cd lerobot
-git checkout da5d2f3e9187fa4690e6667fe8b294cae49016d6
 pip install -e .
 ```
 
 If you want to use Orbbec series cameras as 3-view and wrist cameras, please use the following specific version of Lerobot:
 ```bash
-git clone https://github.com/ryanzhangtianran/lerobot_0.3.4.git
-cd lerobot
-pip install -e .
+pip install "lerobot[orbbec] @ git+https://github.com/ryanzhangtianran/lerobot.git@feat/add-orbbec-support"
 ```
 
 ### 1.3 Clone and Install Franka Teleoperation Control Source
 ```bash
-git clone https://github.com/ryanzhangtianran/franka_teleop.git
-cd franka_teleop
+git clone https://github.com/ryanzhangtianran/Franka-Teleop.git
+cd Franka_Teleop
 pip install -e .
 ```
 

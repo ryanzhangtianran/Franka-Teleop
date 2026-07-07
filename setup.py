@@ -8,9 +8,9 @@ setup(
     name="franka_teleop",
     version="0.1.0",
     description="Franka teleoperation and dataset collection utilities",
-    author="Zhaolong Shen, Ryan Zhang",
-    author_email="shenzhaolong@buaa.edu.cn, ryanzhangtianran@gmail.com",
-    python_requires=">=3.10",
+    author="Ryan Zhang, Claude Code",
+    author_email="ryanzhangtianran@gmail.com",
+    python_requires=">=3.12",
     packages=find_packages(where=".", include=["scripts*", "scripts.*"]),
     include_package_data=True,
     install_requires=[
