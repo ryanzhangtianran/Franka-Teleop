@@ -9,7 +9,7 @@ from datetime import datetime
 def clean_dataset_info():
     # ====== [LOAD CONFIG] ======
     parent_path = Path(__file__).resolve().parent
-    cfg_path = parent_path.parent / "config" / "cfg.yaml"
+    cfg_path = parent_path.parent / "config" / "record_config.yaml"
     with open(cfg_path, "r") as f:
         cfg = yaml.safe_load(f)
 

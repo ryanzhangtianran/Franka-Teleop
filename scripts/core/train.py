@@ -717,7 +717,7 @@ def run_train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
 
 def main():
     parent_path = Path(__file__).resolve().parent
-    cfg_path = parent_path.parent / "config" / "train_cfg.yaml"
+    cfg_path = parent_path.parent / "config" / "train_config.yaml"
     with open(cfg_path, 'r') as f:
         cfg = yaml.safe_load(f)
     

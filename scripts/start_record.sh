@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 一键启动 Franka SpaceMouse 数据采集(含预检)
-# 用法: ./scripts/start_record.sh              正式采集(按 record_cfg.yaml 的 num_episodes)
+# 用法: ./scripts/start_record.sh              正式采集(按 record_config.yaml 的 num_episodes)
 #       ./scripts/start_record.sh --check       只做预检不启动
 #       ./scripts/start_record.sh --single      只录 1 条(长 episode,按 → 主动结束)
 #       ./scripts/start_record.sh --episodes N  本次只录 N 条(覆盖配置,不改文件)
@@ -81,7 +81,7 @@ fi
 echo "──────────────────────────────────────"
 [ "$fail" -ne 0 ] && { echo "预检未通过,已退出。"; exit 1; }
 
-cfg="${FRANKA_RECORD_CFG:-$PROJECT_ROOT/scripts/config/record_cfg.yaml}"
+cfg="${FRANKA_RECORD_CFG:-$PROJECT_ROOT/scripts/config/record_config.yaml}"
 echo "当前任务配置:"
 python - "$cfg" <<'PY'
 import sys, os, yaml

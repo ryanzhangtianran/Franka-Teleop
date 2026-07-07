@@ -4,7 +4,7 @@ setup(
     name="interface",
     version="0.0.1",
     description="LeRobot Franka integration",
-    author="Zhaolong Shen, Ryan Zhang",
+    author="Ryan Zhang, Claude Code",
     author_email="shenzhaolong@buaa.edu.cn, ryanzhangtianran@gmail.com",
     packages=find_packages(),
     install_requires=[

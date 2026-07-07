@@ -617,8 +617,8 @@ def run_record(record_cfg: RecordConfig):
 
 def main():
     parent_path = Path(__file__).resolve().parent
-    # 默认 record_cfg.yaml; 可用 FRANKA_RECORD_CFG 指定别的配置(如 test 配置)
-    cfg_path = os.environ.get("FRANKA_RECORD_CFG") or (parent_path.parent / "config" / "record_cfg.yaml")
+    # 默认 record_config.yaml; 可用 FRANKA_RECORD_CFG 指定别的配置(如 test 配置)
+    cfg_path = os.environ.get("FRANKA_RECORD_CFG") or (parent_path.parent / "config" / "record_config.yaml")
     print(f"[CFG] using {cfg_path}")
     with open(cfg_path, 'r') as f:
         cfg = yaml.safe_load(f)

@@ -24,11 +24,11 @@ setup(
     entry_points={
         "console_scripts": [
             # core commands
-            "franka-record = scripts.core.run_record:main",
-            "franka-replay = scripts.core.run_replay:main",
-            "franka-visualize = scripts.core.run_visualize:main",
-            "franka-reset = scripts.core.reset_robot:main",
-            "franka-train = scripts.core.run_train:main",
+            "franka-record = scripts.core.record:main",
+            "franka-replay = scripts.core.replay:main",
+            "franka-visualize = scripts.core.visualize:main",
+            "franka-reset = scripts.core.reset:main",
+            "franka-train = scripts.core.train:main",
 
             # tools commands (helper tools)
             "tools-check-dataset = scripts.tools.check_dataset_info:main",
@@ -37,7 +37,7 @@ setup(
             # test commands (testing scripts)
             "test-gripper-ctrl = scripts.test.gripper_ctrl:main",
             # unified help command
-            "franka-help = scripts.help.help_info:main",
+            "franka-help = scripts.help.help:main",
         ]
     },
 )
