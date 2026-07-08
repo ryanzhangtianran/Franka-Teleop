@@ -1,6 +1,6 @@
 # Franka Teleoperation Data Collection with Isomorphic Joint Mapping and End-Effector Pose
 
-English | [中文](README_zh.md)
+English | [中文](README_CN.md)
 
 ## Introduction
 

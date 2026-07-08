@@ -22,8 +22,8 @@ SpaceMouse 是一个 6 轴输入设备，用于控制机器人末端位姿。左
 | 工作站 conda 环境 | `franka`（Python 3.12，lerobot 0.6.1，本包） |
 | NUC（机器人主机） | `192.168.50.10` — 运行 Polymetis + `server.py`（zerorpc，端口 4242），统一放在名为 `franka` 的 tmux 会话中 |
 | 机器人 | Franka Research 3，控制接口 `172.16.0.2`（Franka Desk） |
-| 外部相机 | Orbbec Gemini 336L，序列号 `CPC936300041` |
-| 腕部相机 | Orbbec Gemini 336L，序列号 `CPC93630001C` |
+| 外部相机 | Orbbec Gemini 336L |
+| 腕部相机 | Orbbec Gemini 336L |
 | 遥操作设备 | 3Dconnexion SpaceMouse Compact |
 | 数据集存储 | `~/.cache/huggingface/lerobot/<user>/<name>_<日期>_<版本>` |
 
