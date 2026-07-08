@@ -14,19 +14,20 @@ import logging
 log = logging.getLogger(__name__)
 class FrankaInterfaceServer:
     def __init__(self):
-        # self.robot = RobotInterface(ip_address="172.16.0.2")
         try:
             self.robot = RobotInterface(enforce_version=False)
-            log.info("Connected to robot")
-        except:
-            log.error("Failed to connect to robot")
-        
+            log.info("[ROBOT] Connected to robot")
+        except Exception:
+            log.error("[ROBOT] Failed to connect to robot")
+            raise
+
     def gripper_initialize(self):
         try:
             self.gripper = GripperInterface()
-            log.info("Connected to gripper")
-        except:
-            log.error("Failed to connect to gripper")
+            log.info("[GRIPPER] Connected to gripper")
+        except Exception:
+            log.error("[GRIPPER] Failed to connect to gripper")
+            raise
 
     def gripper_goto(
         self, 
@@ -107,29 +108,8 @@ class FrankaInterfaceServer:
     def robot_go_home(self):
         self.robot.go_home()
 
-    # def robot_move_to_ee_pose(
-    #     self,
-    #     position: list = None,
-    #     orientation: list = None,
-    #     time_to_go: float = None,
-    #     delta: bool = False,
-    #     Kx: list = None,
-    #     Kxd: list = None,
-    #     op_space_interp: bool = True,
-    # ):
-    #     self.robot.move_to_ee_pose(
-    #         position=torch.Tensor(position),
-    #         orientation=torch.Tensor(orientation),
-    #         time_to_go=time_to_go,
-    #         delta=delta,
-    #         Kx=torch.Tensor(Kx) if Kx is not None else None,
-    #         Kxd=torch.Tensor(Kxd) if Kxd is not None else None,
-    #         op_space_interp=op_space_interp,
-    #     )
     def robot_move_to_ee_pose(
         self,
-        # position: list = None,
-        # orientation: list = None,
         pose: list = None,
         time_to_go: float = None,
         delta: bool = False,

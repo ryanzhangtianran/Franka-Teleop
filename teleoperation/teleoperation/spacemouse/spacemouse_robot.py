@@ -1,4 +1,4 @@
-from typing import Dict, Optional, Sequence, Tuple
+from typing import Dict, Sequence
 import numpy as np
 
 from .spacemouse_expert import SpaceMouseExpert
@@ -39,24 +39,16 @@ class SpaceMouseRobot(Robot):
         else:
             delta_ee_pose = np.zeros(6) 
 
-        delta_ee_pose_x = delta_ee_pose[0]
-        delta_ee_pose_y = delta_ee_pose[1]
-        delta_ee_pose_z = delta_ee_pose[2]
-        delta_ee_pose_rx = delta_ee_pose[3]
-        delta_ee_pose_ry = delta_ee_pose[4]
-        delta_ee_pose_rz = delta_ee_pose[5]
-
         if len(self._pose_scaler) >= 2:
-            position_scale = self._pose_scaler[0]  
-            orientation_scale = self._pose_scaler[1] 
-            
-            delta_ee_pose[0] = delta_ee_pose_x*position_scale*self._channel_signs[0]  # x
-            delta_ee_pose[1] = delta_ee_pose_y*position_scale*self._channel_signs[1]  # y
-            delta_ee_pose[2] = delta_ee_pose_z*position_scale*self._channel_signs[2]  # z
-            
-            delta_ee_pose[3] = delta_ee_pose_rx*orientation_scale*self._channel_signs[3]  # rx
-            delta_ee_pose[4] = delta_ee_pose_ry*orientation_scale*self._channel_signs[4]  # ry
-            delta_ee_pose[5] = delta_ee_pose_rz*orientation_scale*self._channel_signs[5]  # rz
+            position_scale, orientation_scale = self._pose_scaler[0], self._pose_scaler[1]
+        else:
+            raise ValueError(
+                f"pose_scaler must have [position, orientation] entries, got: {self._pose_scaler}"
+            )
+
+        scales = [position_scale] * 3 + [orientation_scale] * 3
+        for i in range(6):
+            delta_ee_pose[i] = delta_ee_pose[i] * scales[i] * self._channel_signs[i]
 
         if self._use_gripper and len(buttons) >= 2:
             left_button = buttons[0]  
@@ -94,9 +86,9 @@ class SpaceMouseRobot(Robot):
             for axis in axes:
                 obs_dict[f"delta_ee_pose.{axis}"] = float(0.0)
         
+        # Only emit the gripper key when it is a real value; a None here would
+        # crash the robot-side gripper handling and break the dataset schema.
         if self._use_gripper and len(action_data) >= 7:
             obs_dict["gripper_cmd_bin"] = float(action_data[6])
-        else:
-            obs_dict["gripper_cmd_bin"] = None
-        
+
         return obs_dict

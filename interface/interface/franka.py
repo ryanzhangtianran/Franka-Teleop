@@ -1,18 +1,12 @@
 import logging
 import time
-import threading
-from pathlib import Path
 from lerobot.cameras import make_cameras_from_configs
 from lerobot.utils.errors import DeviceNotConnectedError, DeviceAlreadyConnectedError
 from lerobot.robots.robot import Robot
 from .config import FrankaConfig
-from typing import Any, Dict
-import yaml
+from typing import Any
 from .client import FrankaInterfaceClient
-from scipy.spatial.transform import Rotation as R
 import numpy as np
-from lerobot.cameras.configs import ColorMode, Cv2Rotation
-from lerobot.cameras.realsense.camera_realsense import RealSenseCameraConfig
 
 HOME_JOINT_POSITION = np.array(
     [-0.03213387, 0.23953748, -0.1074977, -2.28319335, 0.05735594, 2.56669164, 0.6653772]
@@ -33,15 +27,12 @@ class Franka(Robot):
         self._robot = None
         self._initial_pose = None
         self._prev_observation = None
-        self._num_joints = 7
         self._gripper_force = 20
         self._gripper_speed = 0.2
         self._gripper_grasp_force = 30.0
         self._gripper_grasp_speed = 1.0
         self._gripper_grasp_epsilon = 0.01
-        self._gripper_epsilon = 1.0
         self._gripper_position = 1
-        self._dt = 0.002
         self._last_gripper_position = 1
         
         # 动作平滑：指数移动平均 (EMA) 滤波器
@@ -57,8 +48,7 @@ class Franka(Robot):
         
         # Initialize gripper
         if self.config.use_gripper:
-            self._gripper = self._check_gripper_connection(self.config.robot_ip)
-
+            self._check_gripper_connection(self.config.robot_ip)
 
         # Connect cameras
         logger.info("\n===== [CAM] Initializing Cameras =====")
@@ -68,7 +58,7 @@ class Franka(Robot):
         logger.info("===== [CAM] Cameras Initialized Successfully =====\n")
 
         self.is_connected = True
-        logger.info(f"[INFO] {self.name} env initialized. Control: {self.config.control_mode}\n")
+        logger.info(f"[INFO] {self.name} env initialized.\n")
 
 
     def _check_gripper_connection(self, robot_ip: str):
@@ -79,28 +69,26 @@ class Franka(Robot):
         self._last_gripper_position = 1.0
         self._gripper_position = 1.0
         logger.info("===== [GRIPPER] Gripper initialized successfully.\n")
-        return None
 
 
     def _check_franka_connection(self, robot_ip: str):
+        logger.info("\n===== [ROBOT] Connecting to Franka robot =====")
         try:
-            logger.info("\n===== [ROBOT] Connecting to Franka robot =====")
-            
             franka = FrankaInterfaceClient(ip=robot_ip, port=4242)
             franka.robot_start_joint_impedance_control()
-
             joint_positions = franka.robot_get_joint_positions()
-            if joint_positions is not None and len(joint_positions) == 7:
-                formatted_joints = [round(j, 4) for j in joint_positions]
-                logger.info(f"[ROBOT] Current joint positions: {formatted_joints}")
-                logger.info("===== [ROBOT] Franka connected successfully =====\n")
-            else:
-                logger.info("===== [ERROR] Failed to read joint positions. Check connection or remote control mode =====")
+        except Exception:
+            logger.error("===== [ERROR] Failed to connect to Franka robot =====")
+            raise
 
-        except Exception as e:
-            logger.info("===== [ERROR] Failed to connect to Franka robot =====")
-            logger.info(f"Exception: {e}\n")
+        if joint_positions is None or len(joint_positions) != 7:
+            raise ConnectionError(
+                "Failed to read joint positions. Check the connection and that FCI is activated in Franka Desk."
+            )
 
+        formatted_joints = [round(j, 4) for j in joint_positions]
+        logger.info(f"[ROBOT] Current joint positions: {formatted_joints}")
+        logger.info("===== [ROBOT] Franka connected successfully =====\n")
         return franka
 
 
@@ -108,20 +96,6 @@ class Franka(Robot):
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self.name} is not connected.")
 
-        # Reset robot
-        # ee_positions_reset = np.array(
-        # [0.40581301, 0.0, 0.44111654, -2.22150303, -2.15458315, 0.0]
-        # )
-        # print(f"\nMoving ee to: {ee_positions_reset} ...\n")
-        # self._robot.robot_move_to_ee_pose(pose=ee_positions_reset, time_to_go=2.0)
-        # self._robot.gripper_goto(
-        #     width=robot_config.gripper_max_open,
-        #     speed=robot_config.gripper_speed,
-        #     force=robot_config.gripper_force,
-        #     blocking=True
-        # )
-
-        # joint_positions = np.array([1.58472168, -1.56486702, -1.74356186, -2.634835, -0.11180906, 4.2022109, -1.51133597])
         print(f"\nMoving joint positions to: {HOME_JOINT_POSITION} ...\n")
         self._robot.robot_move_to_joint_positions(positions = HOME_JOINT_POSITION, time_to_go=5.0)
         self._robot.gripper_goto(
@@ -136,7 +110,6 @@ class Franka(Robot):
             self._robot.robot_start_joint_impedance_control()
         except Exception as e:
             logger.warning(f"[ROBOT] Failed to restart controller after reset: {e}")
-        # self._robot.gripper_goto(width=self.config.gripper_max_open, speed=self._gripper_speed, force=self._gripper_force, blocking=True)
         logger.info("===== [ROBOT] Robot reset successfully =====\n")
 
 
@@ -182,18 +155,14 @@ class Franka(Robot):
 
     @property
     def action_features(self) -> dict[str, type]:
-        """Return action features based on control mode."""
-        if self.config.control_mode == "spacemouse":
-            features = {}
-            # Delta EE pose (always present)
-            for axis in ["x", "y", "z", "rx", "ry", "rz"]:
-                features[f"delta_ee_pose.{axis}"] = float
+        """Return action features (delta ee pose + optional binary gripper)."""
+        features = {}
+        for axis in ["x", "y", "z", "rx", "ry", "rz"]:
+            features[f"delta_ee_pose.{axis}"] = float
 
-            if self.config.use_gripper:
-                features["gripper_cmd_bin"] = float
-            return features
-        else:
-            raise ValueError(f"Unsupported control mode: {self.config.control_mode}")
+        if self.config.use_gripper:
+            features["gripper_cmd_bin"] = float
+        return features
 
     def _handle_gripper(self, gripper_value: float, is_binary: bool = True) -> None:
         """Handle gripper control with common logic."""
@@ -232,7 +201,7 @@ class Franka(Robot):
                             blocking=True,
                         )
                 except Exception as grasp_err:
-                    logger.warning(f"[GRIPPER] command failed (状态已同步,不影响下次开合): {grasp_err}")
+                    logger.warning(f"[GRIPPER] command failed (state already synced; next open/close still works): {grasp_err}")
 
             gripper_state = self._robot.gripper_get_state()
             gripper_state_norm = max(0.0, min(1.0, gripper_state["width"] / self.config.gripper_max_open))
@@ -246,11 +215,7 @@ class Franka(Robot):
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
         
-        if self.config.control_mode == "spacemouse":
-            self._send_action_cartesian(action)
-        else:
-            raise ValueError(f"Unsupported control mode: {self.config.control_mode}")
-
+        self._send_action_cartesian(action)
         return action
 
     def _send_action_cartesian(self, action: dict[str, Any]) -> None:
@@ -259,16 +224,6 @@ class Franka(Robot):
         if action.get("reset_requested", False):
             logger.info("[ROBOT] Reset requested, moving to home position...")
             try:
-                # ee_positions_reset= np.array(
-                #     [0.55581301, 0.00308523, 0.44111654, -2.22150303, -2.15458315, 0.00646556]
-                # )
-                # self._robot.robot_move_to_ee_pose(pose = ee_positions_reset, time_to_go=2.0)
-                # self._robot.gripper_goto(
-                #     width=self.config.gripper_max_open,
-                #     speed=self._gripper_speed,
-                #     force=self._gripper_force,
-                #     blocking=True
-                # )
                 self._robot.robot_move_to_joint_positions(positions = HOME_JOINT_POSITION, time_to_go=5.0)
                 self._robot.gripper_goto(
                     width=self.config.gripper_max_open,
@@ -398,10 +353,12 @@ class Franka(Robot):
             obs_dict["gripper_state_norm"] = None
             obs_dict["gripper_cmd_bin"] = None
 
-        # Capture images from cameras
+        # Capture images from cameras. async_read returns the latest frame from the
+        # camera's background thread instead of blocking a full frame interval per
+        # camera, which is what kept the record loop below the target FPS.
         for cam_key, cam in self.cameras.items():
             start = time.perf_counter()
-            obs_dict[cam_key] = cam.read()
+            obs_dict[cam_key] = cam.async_read(timeout_ms=200)
             dt_ms = (time.perf_counter() - start) * 1e3
             logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
 
@@ -415,6 +372,16 @@ class Franka(Robot):
 
         for cam in self.cameras.values():
             cam.disconnect()
+
+        if self._robot is not None:
+            try:
+                self._robot.robot_terminate_current_policy()
+            except Exception as e:
+                logger.warning(f"[ROBOT] Failed to terminate controller on disconnect: {e}")
+            try:
+                self._robot.close()
+            except Exception as e:
+                logger.warning(f"[ROBOT] Failed to close zerorpc client: {e}")
 
         self.is_connected = False
         logger.info(f"[INFO] ===== All {self.name} connections have been closed =====")
@@ -462,67 +429,3 @@ class Franka(Robot):
     def config(self, value):
         self._config = value
 
-if __name__ == "__main__":
-    import numpy as np
-    logging.basicConfig(level=logging.INFO, format='%(message)s')
-    logger = logging.getLogger(__name__)
-
-    class RecordConfig:
-        def __init__(self, cfg: Dict[str, Any]):
-            robot = cfg["robot"]
-            cam = cfg["cameras"]
-            self.fps: str = cfg.get("fps", 15)
-
-            # robot config
-            self.robot_ip = robot["ip"]
-            self.use_gripper = robot["use_gripper"]
-            self.close_threshold = robot["close_threshold"]
-            self.gripper_bin_threshold = robot["gripper_bin_threshold"]
-            self.gripper_reverse = robot["gripper_reverse"]
-            self.control_mode = robot["control_mode"]
-
-            # cameras config
-            self.wrist_cam_serial: str = cam["wrist_cam_serial"]
-            self.exterior_cam_serial: str = cam["exterior_cam_serial"]
-            self.width: int = cam["width"]
-            self.height: int = cam["height"]
-
-
-    with open(Path(__file__).parent / "config" / "cfg.yaml", "r") as f:
-        cfg = yaml.safe_load(f)
-
-
-    record_cfg = RecordConfig(cfg["record"])
-
-    # Create RealSenseCamera configurations
-    wrist_image_cfg = RealSenseCameraConfig(serial_number_or_name=record_cfg.wrist_cam_serial,
-                                    fps=record_cfg.fps,
-                                    width=record_cfg.width,
-                                    height=record_cfg.height,
-                                    color_mode=ColorMode.RGB,
-                                    use_depth=False,
-                                    rotation=Cv2Rotation.NO_ROTATION)
-
-    exterior_image_cfg = RealSenseCameraConfig(serial_number_or_name=record_cfg.exterior_cam_serial,
-                                    fps=record_cfg.fps,
-                                    width=record_cfg.width,
-                                    height=record_cfg.height,
-                                    color_mode=ColorMode.RGB,
-                                    use_depth=False,
-                                    rotation=Cv2Rotation.NO_ROTATION)
-
-    # Create the robot and teleoperator configurations
-    camera_config = {"wrist_image": wrist_image_cfg, "exterior_image": exterior_image_cfg}
-
-    robot_config = FrankaConfig(
-            robot_ip=record_cfg.robot_ip,
-            cameras = camera_config,
-            debug = False,
-            close_threshold = record_cfg.close_threshold,
-            use_gripper = record_cfg.use_gripper,
-            gripper_reverse = record_cfg.gripper_reverse,
-            gripper_bin_threshold = record_cfg.gripper_bin_threshold,
-            control_mode = record_cfg.control_mode
-        )
-    franka = Franka(robot_config)
-    franka.connect()

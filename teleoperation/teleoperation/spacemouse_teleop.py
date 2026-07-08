@@ -38,7 +38,8 @@ class SpacemouseTeleop(Teleoperator):
         features = {}
         for axis in ["x", "y", "z", "rx", "ry", "rz"]:
             features[f"delta_ee_pose.{axis}"] = float
-        features["gripper_cmd_bin"] = float
+        if self.cfg.use_gripper:
+            features["gripper_cmd_bin"] = float
         return features
 
     @property

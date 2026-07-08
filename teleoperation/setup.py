@@ -4,10 +4,10 @@ setup(
     name="teleoperation",
     version="0.0.1",
     description="LeRobot teleoperator integration",
-    author="Zhaolong Shen, Ryan Zhang",
-    author_email="shenzhaolong@buaa.edu.cn, ryanzhangtianran@gmail.com",
+    author="Ryan Zhang",
+    author_email="ryanzhangtianran@gmail.com",
     packages=find_packages(),
-    python_requires=">=3.10",
+    python_requires=">=3.12",
     install_requires=[
         "easyhid",
     ],

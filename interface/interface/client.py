@@ -9,20 +9,19 @@ import zerorpc
 log = logging.getLogger(__name__)
 
 class FrankaInterfaceClient:
-    def __init__(self, ip='192.168.1.109', port=4242):
-        try:
-            self.server = zerorpc.Client(heartbeat=20)
-            self.server.connect(f"tcp://{ip}:{port}")
-            log.info("Connected to server")
-        except:
-            log.error("Failed to connect to server")
+    def __init__(self, ip='192.168.50.10', port=4242):
+        # zerorpc connects lazily; failures surface on the first RPC call
+        self.server = zerorpc.Client(heartbeat=20)
+        self.server.connect(f"tcp://{ip}:{port}")
+        log.info(f"[CLIENT] zerorpc client bound to tcp://{ip}:{port}")
 
     def gripper_initialize(self):
         try:
             self.server.gripper_initialize()
-            log.info("Connected to gripper")
-        except:
-            log.error("Failed to connect to gripper")
+            log.info("[GRIPPER] Gripper initialized")
+        except Exception:
+            log.error("[GRIPPER] Failed to initialize gripper")
+            raise
 
     def gripper_goto(
         self, 
@@ -33,12 +32,6 @@ class FrankaInterfaceClient:
         epsilon_outer: float = -1.0,
         blocking: bool = True
     ):
-        # self.server.gripper_goto(
-        #     width=width,
-        #     speed=speed,
-        #     force=force,
-        #     blocking=blocking,
-        # )
         self.server.gripper_goto(width, speed, force, epsilon_inner, epsilon_outer, blocking)
 
     def gripper_grasp(
@@ -50,14 +43,6 @@ class FrankaInterfaceClient:
         epsilon_outer: float = -1.0,
         blocking: bool = True,
     ):
-        # self.server.gripper_grasp(
-        #     speed=speed,
-        #     force=force,
-        #     grasp_width=grasp_width,
-        #     epsilon_inner=epsilon_inner,
-        #     epsilon_outer=epsilon_outer,
-        #     blocking=blocking,
-        # )
         self.server.gripper_grasp(
             speed,
             force,
@@ -113,8 +98,6 @@ class FrankaInterfaceClient:
 
     def robot_move_to_ee_pose(
         self,
-        # position: np.ndarray = None,
-        # orientation: np.ndarray = None,
         pose: np.ndarray = None,
         time_to_go: float = None,
         delta: bool = False,
@@ -171,8 +154,8 @@ class FrankaInterfaceClient:
         self.server.close()
 
 if __name__ == "__main__":
-    
-    Franka = FrankaInterfaceClient(ip="192.168.1.109")
+
+    Franka = FrankaInterfaceClient()
     Franka.gripper_initialize()
     
     Franka.gripper_goto(width=0.06, speed=0.1, force=10.0)

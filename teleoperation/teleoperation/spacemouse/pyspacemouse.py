@@ -296,7 +296,7 @@ class DeviceSpec(object):
                         elif axis_val < -block_dof_callback.filter:
                             block_dof_callback.callback_minus(self.tuple_state, axis_val)
                     elif axis_val > block_dof_callback.filter or axis_val < -block_dof_callback.filter:
-                        block_dof_callback.cafllback(self.tuple_state, axis_val)
+                        block_dof_callback.callback(self.tuple_state, axis_val)
                     self.dict_state_last[axis_name] = now
 
         # only call the button callback if the button state actually changed
@@ -890,7 +890,7 @@ def open(
             _active_device = [new_device]
             return new_device
 
-    print("Unknown error occured.")
+    print("Unknown error occurred.")
     return None
 
 

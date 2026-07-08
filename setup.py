@@ -28,14 +28,18 @@ setup(
             "franka-replay = scripts.core.replay:main",
             "franka-visualize = scripts.core.visualize:main",
             "franka-reset = scripts.core.reset:main",
-            "franka-train = scripts.core.train:main",
+            "franka-connect = scripts.tools.desk_tunnel:main_connect",
+            "franka-disconnect = scripts.tools.desk_tunnel:main_disconnect",
+            "franka-start = scripts.tools.nuc_service:main_start",
+            "franka-stop = scripts.tools.nuc_service:main_stop",
+            "franka-attach = scripts.tools.nuc_service:main_attach",
+            "franka-status = scripts.tools.nuc_service:main_status",
+            "franka-gripper-reinit = scripts.tools.nuc_service:main_gripper_reinit",
 
             # tools commands (helper tools)
             "tools-check-dataset = scripts.tools.check_dataset_info:main",
             "tools-check-rs = scripts.tools.rs_devices:main",
 
-            # test commands (testing scripts)
-            "test-gripper-ctrl = scripts.test.gripper_ctrl:main",
             # unified help command
             "franka-help = scripts.help.help:main",
         ]

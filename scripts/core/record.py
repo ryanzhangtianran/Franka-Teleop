@@ -1,17 +1,13 @@
+import argparse
 import os
+import socket
+import subprocess
 import yaml
 import time
 from pathlib import Path
 from typing import Dict, Any
 import numpy as np
 from scripts.utils.dataset_utils import generate_dataset_name, update_dataset_info
-from scripts.utils.dataset_schema_utils import (
-    build_legacy_action_frame,
-    build_legacy_dataset_features,
-    build_legacy_observation_frame,
-    load_dataset_schema_config,
-    uses_legacy_dataset_schema,
-)
 from interface import FrankaConfig, Franka
 from interface.franka import HOME_JOINT_POSITION
 from teleoperation.config_teleop import SpacemouseTeleopConfig
@@ -19,27 +15,123 @@ from teleoperation.spacemouse_teleop import SpacemouseTeleop
 from lerobot.cameras.configs import ColorMode, Cv2Rotation
 from lerobot.cameras.orbbec.configuration_orbbec import OrbbecCameraConfig
 from lerobot.cameras.realsense.camera_realsense import RealSenseCameraConfig
-from lerobot.scripts.lerobot_record import record_loop as standard_record_loop
+from lerobot.scripts.lerobot_record import record_loop
 from lerobot.processor import make_default_processors
 from lerobot.utils.visualization_utils import init_rerun
-from lerobot.utils.control_utils import init_keyboard_listener
+from lerobot.utils.keyboard_input import init_keyboard_listener
 from send2trash import send2trash
 import termios, sys
 from lerobot.utils.constants import HF_LEROBOT_HOME
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.datasets.utils import hw_to_dataset_features
-from lerobot.utils.control_utils import sanity_check_dataset_robot_compatibility
-from lerobot.configs.policies import PreTrainedConfig
-from lerobot.policies.factory import make_policy, make_pre_post_processors
-from lerobot.processor.rename_processor import rename_stats
-from lerobot.datasets.image_writer import safe_stop_image_writer
+from lerobot.utils.feature_utils import hw_to_dataset_features
+from lerobot.common.control_utils import sanity_check_dataset_robot_compatibility
 from lerobot.utils.visualization_utils import log_rerun_data
-from lerobot.utils.robot_utils import busy_wait
-from dataclasses import field
+from lerobot.utils.robot_utils import precise_sleep
 
 import logging
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+ZERORPC_PORT = 4242
+ORBBEC_USB_ID = "2bc5:0807"
+# rerun window + arrow-key listener must land on the :2 physical display
+DEFAULT_DISPLAY = ":2"
+DEFAULT_XAUTHORITY = "/run/user/1007/gdm/Xauthority"
+
+# Robot-state probe runs in a subprocess so a hung zerorpc call can be killed on timeout.
+_ROBOT_PROBE = """
+from interface.client import FrankaInterfaceClient
+import numpy as np
+c = FrankaInterfaceClient(ip="{ip}", port={port})
+jp = c.robot_get_joint_positions(); c.close()
+print("OK" if np.isfinite(jp).all() and len(jp) == 7 else "BAD")
+"""
+
+
+def _port_open(ip: str, port: int, timeout: float = 3.0) -> bool:
+    try:
+        with socket.create_connection((ip, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _lsusb_output() -> str:
+    try:
+        return subprocess.run(["lsusb"], capture_output=True, text=True).stdout
+    except OSError:
+        return ""
+
+
+def _x_display_ok() -> bool:
+    try:
+        return subprocess.run(
+            ["xset", "q"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        ).returncode == 0
+    except OSError:
+        return False
+
+
+def _robot_state_ok(ip: str, port: int) -> bool:
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", _ROBOT_PROBE.format(ip=ip, port=port)],
+            capture_output=True, text=True, timeout=10,
+        )
+        return result.stdout.strip().endswith("OK")
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+
+
+def run_preflight(robot_ip: str) -> bool:
+    ok = True
+    print("── Preflight ─────────────────────────")
+
+    if _port_open(robot_ip, ZERORPC_PORT):
+        print(f"  ✅ NUC {robot_ip}:{ZERORPC_PORT} (Polymetis/zerorpc) online")
+    else:
+        print("  ❌ NUC service unreachable — start the Polymetis services + server.py on the NUC (franka-start)")
+        ok = False
+
+    usb = _lsusb_output().lower()
+    if "3dconnexion" in usb:
+        print("  ✅ SpaceMouse connected")
+    else:
+        print("  ❌ SpaceMouse not detected")
+        ok = False
+
+    cam_n = usb.count(ORBBEC_USB_ID)
+    if cam_n >= 2:
+        print(f"  ✅ Orbbec cameras ×{cam_n}")
+    else:
+        print(f"  ❌ Only {cam_n} Orbbec camera(s) detected (need 2)")
+        ok = False
+
+    if _x_display_ok():
+        print(f"  ✅ X display {os.environ.get('DISPLAY', '?')} available")
+    else:
+        print(f"  ❌ Cannot access X display {os.environ.get('DISPLAY', '?')} (no graphical session?)")
+        ok = False
+
+    if _robot_state_ok(robot_ip, ZERORPC_PORT):
+        print("  ✅ Robot state readable (FCI OK)")
+    else:
+        print("  ❌ Cannot read robot joint positions — check that FCI is activated in Franka Desk and the e-stop is released")
+        ok = False
+
+    print("──────────────────────────────────────")
+    return ok
+
+
+def print_config_summary(cfg: Dict[str, Any], n_override: int | None) -> None:
+    c = cfg["record"]
+    n = c["task"]["num_episodes"]
+    n_show = f"{n_override} (command-line override; config file says {n})" if n_override else str(n)
+    print("Current task config:")
+    print(f"  repo_id     : {c['repo_id']}")
+    print(f"  task        : {c['task']['description']}")
+    print(f"  episodes    : {n_show}  | fps: {c['fps']}  | debug: {c['debug']}")
+    print(f"  robot.ip    : {c['robot']['ip']}")
 
 
 class RecordConfig:
@@ -51,26 +143,18 @@ class RecordConfig:
         time = cfg["time"]
         cam = cfg["cameras"]
         robot = cfg["robot"]
-        policy = cfg["policy"]
         teleop = cfg["teleop"]
-        
+
         # Global config
         self.repo_id: str = cfg["repo_id"]
         self.debug: bool = cfg.get("debug", True)
         self.fps: str = cfg.get("fps", 15)
         self.dataset_path: str = HF_LEROBOT_HOME / self.repo_id
         self.user_info: str = cfg.get("user_notes", None)
-        self.run_mode: str = cfg.get("run_mode", "run_record")
-        self.rename_map: dict[str, str] = field(default_factory=dict)
-        self.dataset_schema_config: str | None = cfg.get("dataset_schema_config")
-        
-        # Teleop config - parse based on control mode
-        self.control_mode = teleop.get("control_mode", "spacemouse")
+
+        # Teleop config (SpaceMouse)
         self._parse_teleop_config(teleop)
-        
-        # Policy config
-        self._parse_policy_config(policy)
-        
+
         # Robot config
         self.robot_ip: str = robot["ip"]
         self.use_gripper: bool = robot["use_gripper"]
@@ -89,12 +173,7 @@ class RecordConfig:
         # Time config
         self.episode_time_sec: int = time.get("episode_time_sec", 60)
         self.reset_time_sec: int = time.get("reset_time_sec", 10)
-        self.save_mera_period: int = time.get("save_mera_period", 1)
-        # 推迟视频编码: 1=每条录完立即编码(默认,采集中会等); >1(或设很大)=录制全程不编码,
-        # 录完后统一编码,使采集过程不被编码阻塞。环境变量 FRANKA_BATCH_ENCODING 可覆盖。
-        self.batch_encoding_size: int = int(
-            os.environ.get("FRANKA_BATCH_ENCODING", time.get("batch_encoding_size", 1))
-        )
+        self.save_meta_period: int = time.get("save_meta_period", 1)
 
         # Cameras config
         self.camera_type: str = cam.get("camera_type", cam.get("type", "realsense")).lower()
@@ -107,53 +186,39 @@ class RecordConfig:
         self.push_to_hub: bool = storage.get("push_to_hub", False)
     
     def _parse_teleop_config(self, teleop: Dict[str, Any]) -> None:
-        """Parse teleoperation configuration based on control mode."""
-        if self.control_mode == "spacemouse":
-            sm_cfg = teleop["spacemouse_config"]
-            self.use_gripper = sm_cfg["use_gripper"]
-            self.pose_scaler = sm_cfg["pose_scaler"]
-            self.channel_signs = sm_cfg["channel_signs"]
+        """Parse SpaceMouse teleoperation configuration."""
+        sm_cfg = teleop["spacemouse_config"]
+        self.use_gripper = sm_cfg["use_gripper"]
+        self.pose_scaler = sm_cfg["pose_scaler"]
+        self.channel_signs = sm_cfg["channel_signs"]
 
-        else:
-            raise ValueError(f"Unsupported control mode: {self.control_mode}")
-    
-    def _parse_policy_config(self, policy: Dict[str, Any]) -> None:
-        """Parse policy configuration."""
-        policy_type = policy["type"]
-        if policy_type == "act":
-            from lerobot.policies import ACTConfig
-            self.policy = ACTConfig(
-                device=policy["device"],
-                push_to_hub=policy["push_to_hub"],
-            )
-        elif policy_type == "diffusion":
-            from lerobot.policies import DiffusionConfig
-            self.policy = DiffusionConfig(
-                device=policy["device"],
-                push_to_hub=policy["push_to_hub"],
-            )
-        else:
-            raise ValueError(f"No config for policy type: {policy_type}")
-        
-        if policy.get("pretrained_path"):
-            self.policy.pretrained_path = policy["pretrained_path"]
-    
     def create_teleop_config(self):
         """Create teleoperation configuration object."""
-        if self.control_mode == "spacemouse":
-            return SpacemouseTeleopConfig(
-                use_gripper=self.use_gripper,
-                pose_scaler=self.pose_scaler,
-                channel_signs=self.channel_signs,
-            )
-        else:
-            raise ValueError(f"Unsupported control mode: {self.control_mode}")
+        return SpacemouseTeleopConfig(
+            use_gripper=self.use_gripper,
+            pose_scaler=self.pose_scaler,
+            channel_signs=self.channel_signs,
+        )
+
+def _set_terminal_echo(enabled: bool) -> None:
+    """Toggle tty echo so arrow/Esc key presses do not spill ^[[C / ^[ into the terminal."""
+    if not sys.stdin.isatty():
+        return
+    fd = sys.stdin.fileno()
+    attrs = termios.tcgetattr(fd)
+    if enabled:
+        attrs[3] |= termios.ECHO
+    else:
+        attrs[3] &= ~termios.ECHO
+    termios.tcsetattr(fd, termios.TCSADRAIN, attrs)
+
 
 def handle_incomplete_dataset(dataset_path):
     if dataset_path.exists():
+        _set_terminal_echo(True)
         print(f"====== [WARNING] Detected an incomplete dataset folder: {dataset_path} ======")
-        print("  ▶ 程序异常/中断退出,留下了未完成的数据集")
-        print("  ▶ 请在【启动终端】(不是物理键盘)输入: y=删除(可从回收站找回) | n=保留,稍后手动处理")
+        print("  ▶ The program exited abnormally and left an unfinished dataset behind.")
+        print("  ▶ Answer in THIS terminal (not the physical keyboard): y = delete (recoverable from trash) | n = keep for manual handling")
         termios.tcflush(sys.stdin, termios.TCIFLUSH)
         ans = input("Do you want to delete it? (y/n): ").strip().lower()
         if ans == "y":
@@ -216,57 +281,6 @@ def create_camera_configs(record_cfg: RecordConfig):
         )
 
     return camera_config
-
-
-@safe_stop_image_writer
-def legacy_record_loop(
-    robot,
-    events: dict[str, bool],
-    fps: int,
-    teleop,
-    teleop_action_processor,
-    robot_action_processor,
-    robot_observation_processor,
-    control_time_s: int | None = None,
-    single_task: str | None = None,
-    display_data: bool = False,
-    dataset: LeRobotDataset | None = None,
-):
-    if teleop is None:
-        raise ValueError("Legacy dataset schema currently supports teleoperation recording only.")
-
-    if dataset is not None and dataset.fps != fps:
-        raise ValueError(f"The dataset fps should be equal to requested fps ({dataset.fps} != {fps}).")
-
-    timestamp = 0
-    start_episode_t = time.perf_counter()
-    while timestamp < control_time_s:
-        start_loop_t = time.perf_counter()
-
-        if events["exit_early"]:
-            events["exit_early"] = False
-            break
-
-        obs = robot.get_observation()
-        obs_processed = robot_observation_processor(obs)
-
-        act = teleop.get_action()
-        act_processed_teleop = teleop_action_processor((act, obs))
-        robot_action_to_send = robot_action_processor((act_processed_teleop, obs))
-        _sent_action = robot.send_action(robot_action_to_send)
-
-        if dataset is not None:
-            observation_frame = build_legacy_observation_frame(dataset.features, obs_processed)
-            action_frame = build_legacy_action_frame(dataset.features, act_processed_teleop)
-            frame = {**observation_frame, **action_frame, "task": single_task}
-            dataset.add_frame(frame)
-
-        if display_data:
-            log_rerun_data(observation=obs_processed, action=act_processed_teleop)
-
-        dt_s = time.perf_counter() - start_loop_t
-        busy_wait(1 / fps - dt_s)
-        timestamp = time.perf_counter() - start_episode_t
 
 
 def reset_environment_loop(
@@ -340,16 +354,26 @@ def reset_environment_loop(
                 logging.warning(f"[RESET] Failed to log reset observation: {e}")
 
         dt_s = time.perf_counter() - start_loop_t
-        busy_wait(1 / fps - dt_s)
+        precise_sleep(max(1 / fps - dt_s, 0.0))
         timestamp = time.perf_counter() - start_reset_t
 
 
 def run_record(record_cfg: RecordConfig):
     print("====== [START] Starting recording ======")
+    # Episode control keys (→ ← Esc) are read globally via pynput but still land in
+    # this terminal; disable echo so they don't spill ^[[C / ^[ between the prompts.
+    _set_terminal_echo(False)
     try:
         dataset_name, data_version = generate_dataset_name(record_cfg)
-        config_dir = Path(__file__).resolve().parent.parent / "config"
-        dataset_schema_config = load_dataset_schema_config(record_cfg.dataset_schema_config, config_dir)
+
+        # Quiet the Orbbec SDK's USB-enumeration warnings (string-descriptor timeouts
+        # are harmless startup noise); the logger setting is global to the process.
+        if record_cfg.camera_type == "orbbec":
+            try:
+                import pyorbbecsdk as ob
+                ob.Context().set_logger_level(ob.OBLogLevel.ERROR)
+            except Exception as e:
+                logging.warning(f"[CAM] Failed to set Orbbec SDK log level: {e}")
 
         # Create the robot and teleoperator configurations
         camera_config = create_camera_configs(record_cfg)
@@ -366,22 +390,14 @@ def run_record(record_cfg: RecordConfig):
             gripper_reverse = record_cfg.gripper_reverse,
             gripper_bin_threshold = record_cfg.gripper_bin_threshold,
             gripper_max_open = record_cfg.gripper_max_open,
-            control_mode = record_cfg.control_mode,
         )
         # Initialize the robot
         robot = Franka(robot_config)
 
         # Configure the dataset features
-        if uses_legacy_dataset_schema(dataset_schema_config):
-            dataset_features = build_legacy_dataset_features(
-                dataset_schema_config,
-                robot.action_features,
-                robot.observation_features,
-            )
-        else:
-            action_features = hw_to_dataset_features(robot.action_features, "action")
-            obs_features = hw_to_dataset_features(robot.observation_features, "observation", use_video=True)
-            dataset_features = {**action_features, **obs_features}
+        action_features = hw_to_dataset_features(robot.action_features, "action")
+        obs_features = hw_to_dataset_features(robot.observation_features, "observation", use_video=True)
+        dataset_features = {**action_features, **obs_features}
 
         if record_cfg.resume:
             dataset = LeRobotDataset(
@@ -392,7 +408,6 @@ def run_record(record_cfg: RecordConfig):
                 dataset.start_image_writer()
             sanity_check_dataset_robot_compatibility(dataset, robot, record_cfg.fps, dataset_features)
         else:
-            # # Create the dataset
             dataset = LeRobotDataset.create(
                 repo_id=dataset_name,
                 fps=record_cfg.fps,
@@ -400,15 +415,9 @@ def run_record(record_cfg: RecordConfig):
                 robot_type=robot.name,
                 use_videos=True,
                 image_writer_threads=4,
-                batch_encoding_size=record_cfg.batch_encoding_size,
+                # buffer size 1 -> each episode's metadata is saved immediately
+                metadata_buffer_size=record_cfg.save_meta_period,
             )
-            if record_cfg.batch_encoding_size > 1:
-                logging.info(
-                    f"====== [ENCODE] 推迟编码已开启 (batch_encoding_size={record_cfg.batch_encoding_size}):"
-                    f" 录制全程不编码,结束后统一编码 ======"
-                )
-        # Set the episode metadata buffer size to 1, so that each episode is saved immediately
-        dataset.meta.metadata_buffer_size = record_cfg.save_mera_period
 
         # Initialize the keyboard listener and rerun visualization
         _, events = init_keyboard_listener()
@@ -416,91 +425,45 @@ def run_record(record_cfg: RecordConfig):
 
         # Create processor
         teleop_action_processor, robot_action_processor, robot_observation_processor = make_default_processors()
-        preprocessor = None
-        postprocessor = None
 
-        # configure the teleop and policy
-        if record_cfg.run_mode == "run_record":
-            logging.info("====== [INFO] Running in teleoperation mode ======")
-            teleop = SpacemouseTeleop(teleop_config)
-            policy = None
-        elif record_cfg.run_mode == "run_policy":
-            logging.info("====== [INFO] Running in policy mode ======")
-            policy = make_policy(record_cfg.policy, ds_meta=dataset.meta)
-            teleop = None
-        elif record_cfg.run_mode == "run_mix":
-            logging.info("====== [INFO] Running in mixed mode ======")
-            policy = make_policy(record_cfg.policy, ds_meta=dataset.meta)
-            teleop = SpacemouseTeleop(teleop_config)
-
-        if uses_legacy_dataset_schema(dataset_schema_config) and record_cfg.run_mode != "run_record":
-            raise ValueError("Legacy dataset schema currently supports run_record only.")
-        
-        if policy is not None:
-            preprocessor, postprocessor = make_pre_post_processors(
-                policy_cfg=record_cfg.policy,
-                pretrained_path=record_cfg.policy.pretrained_path,
-                dataset_stats=rename_stats(dataset.meta.stats, {}),  # 使用空字典作为rename_map
-                preprocessor_overrides={
-                    "device_processor": {"device": record_cfg.policy.device},
-                    "rename_observations_processor": {"rename_map": {}},  # 使用空字典作为rename_map
-                },
-            )
+        print("====== [INFO] Running in teleoperation mode ======")
+        teleop = SpacemouseTeleop(teleop_config)
 
         robot.connect()
-        if teleop is not None:
-            teleop.connect()
+        teleop.connect()
 
         episode_idx = 0
 
         while episode_idx < record_cfg.num_episodes and not events["stop_recording"]:
-            logging.info("")
-            logging.info(f"====== [RECORD] Recording episode {episode_idx + 1} of {record_cfg.num_episodes} ======")
-            logging.info("  ▶ 录制中!你的所有操作和画面正在被记录")
-            logging.info("  ▶ SpaceMouse: 推杆控臂(行程过半才响应) | 左键=开夹爪 | 右键=合夹爪")
-            logging.info("  ▶ 按键(物理键盘): →=完成并保存本条 | ←=录废了,丢弃重录 | Esc=结束整个会话")
-            if uses_legacy_dataset_schema(dataset_schema_config):
-                legacy_record_loop(
-                    robot=robot,
-                    events=events,
-                    fps=record_cfg.fps,
-                    teleop=teleop,
-                    teleop_action_processor=teleop_action_processor,
-                    robot_action_processor=robot_action_processor,
-                    robot_observation_processor=robot_observation_processor,
-                    dataset=dataset,
-                    control_time_s=record_cfg.episode_time_sec,
-                    single_task=record_cfg.task_description,
-                    display_data=record_cfg.display,
-                )
-            else:
-                standard_record_loop(
-                    robot=robot,
-                    events=events,
-                    fps=record_cfg.fps,
-                    teleop=teleop,
-                    policy=policy,
-                    preprocessor=preprocessor,
-                    postprocessor=postprocessor,
-                    teleop_action_processor=teleop_action_processor,
-                    robot_action_processor=robot_action_processor,
-                    robot_observation_processor=robot_observation_processor,
-                    dataset=dataset,
-                    control_time_s=record_cfg.episode_time_sec,
-                    single_task=record_cfg.task_description,
-                    display_data=record_cfg.display,
-                )
+            print("")
+            print(f"====== [RECORD] Recording episode {episode_idx + 1} of {record_cfg.num_episodes} ======")
+            print("  ▶ Recording! All your motions and camera frames are being captured.")
+            print("  ▶ SpaceMouse: push the cap to move the arm (responds past half travel) | left button = open gripper | right button = close gripper")
+            print("  ▶ Keys (physical keyboard): → = finish and save this episode | ← = discard and re-record | Esc = end the whole session", flush=True)
+            record_loop(
+                robot=robot,
+                events=events,
+                fps=record_cfg.fps,
+                teleop=teleop,
+                teleop_action_processor=teleop_action_processor,
+                robot_action_processor=robot_action_processor,
+                robot_observation_processor=robot_observation_processor,
+                dataset=dataset,
+                control_time_s=record_cfg.episode_time_sec,
+                single_task=record_cfg.task_description,
+                display_data=record_cfg.display,
+            )
 
             if events["rerecord_episode"]:
-                logging.info("====== [RERECORD] 收到 ←:本条数据已丢弃 ======")
+                print("====== [RERECORD] Got ←: this episode has been discarded ======")
                 events["rerecord_episode"] = False
                 events["exit_early"] = False
                 dataset.clear_episode_buffer()
                 # 重录前先复位回 Home(并重开夹爪、同步夹爪状态),避免从上一条结束的乱姿态直接开录
                 if not events["stop_recording"]:
-                    logging.info("====== [RESET] 机械臂正在回 Home 位,请把物体摆回初始位置 ======")
-                    logging.info("  ▶ 摆好后按 → :结束复位并【立即开始重录这一条】,请做好操作准备!")
-                    logging.info("  ▶ 按 Esc 结束会话")
+                    print("====== [RESET] Arm is moving back to home; put the objects back to their initial positions ======")
+                    print("  ▶ When the scene is ready press → : reset ends and RE-RECORDING STARTS IMMEDIATELY — be ready to operate!")
+                    print("  ▶ Press Esc to end the session", flush=True)
                     reset_environment_loop(
                         robot=robot,
                         events=events,
@@ -510,18 +473,18 @@ def run_record(record_cfg: RecordConfig):
                     )
                 continue
 
-            logging.info("====== [SAVE] 正在保存并编码视频(下方 Svt[info] 滚动输出是编码器日志,属正常现象)... ======")
+            print("====== [SAVE] Saving and encoding video (the scrolling Svt[info] lines below are normal encoder logs)... ======", flush=True)
             dataset.save_episode()
-            logging.info(f"====== [SAVE] ✅ 第 {episode_idx + 1} 条 episode 已保存 ======")
+            print(f"====== [SAVE] ✅ Episode {episode_idx + 1} saved ======")
 
             # Reset the environment if not stopping or re-recording
             if not events["stop_recording"] and (episode_idx < record_cfg.num_episodes - 1 or events["rerecord_episode"]):
                 # Wait for the right arrow key (same physical keyboard as episode control),
                 # so the operator never has to switch back to the launch terminal.
-                logging.info("")
-                logging.info("====== [WAIT] 程序已暂停,等待你的指令(此时不在录制,可以休息)======")
-                logging.info("  ▶ 按 → 进入复位:机械臂将自动移回 Home 位(注意:机械臂会运动!)")
-                logging.info("  ▶ 按 Esc 结束会话:保存全部已录数据并退出")
+                print("")
+                print("====== [WAIT] Paused, waiting for your command (not recording now — take a break) ======")
+                print("  ▶ Press → to start reset: the arm will MOVE back to home automatically!")
+                print("  ▶ Press Esc to end the session: save everything recorded and exit", flush=True)
                 events["exit_early"] = False
                 events["rerecord_episode"] = False
                 while not events["exit_early"] and not events["stop_recording"]:
@@ -530,13 +493,13 @@ def run_record(record_cfg: RecordConfig):
                 events["rerecord_episode"] = False
 
                 if events["stop_recording"]:
-                    logging.info("====== [STOP] 收到 Esc:结束录制会话,开始收尾保存... ======")
+                    print("====== [STOP] Got Esc: ending the session, finalizing... ======")
                     break
 
-                logging.info("")
-                logging.info("====== [RESET] 机械臂正在回 Home 位,请趁现在把物体摆回初始位置 ======")
-                logging.info("  ▶ 场景摆好后按 → :结束复位并【立即开始录制下一条】,请做好操作准备!")
-                logging.info("  ▶ 按 Esc 结束会话")
+                print("")
+                print("====== [RESET] Arm is moving back to home; use this time to put the objects back ======")
+                print("  ▶ When the scene is ready press → : reset ends and the NEXT EPISODE STARTS IMMEDIATELY — be ready to operate!")
+                print("  ▶ Press Esc to end the session", flush=True)
                 reset_environment_loop(
                     robot=robot,
                     events=events,
@@ -548,74 +511,65 @@ def run_record(record_cfg: RecordConfig):
             episode_idx += 1
 
         # Clean up
-        logging.info("")
-        logging.info("====== [FINALIZE] 录制结束,正在断开设备并整理数据集(可能需要几十秒,请勿 Ctrl+C)... ======")
+        print("")
+        print("====== [FINALIZE] Recording ended; disconnecting devices and finalizing the dataset (may take tens of seconds — do NOT Ctrl+C)... ======")
         robot.disconnect()
-        if teleop is not None:
-            teleop.disconnect()
-
-        # 推迟编码模式: 录制全程没编码,这里逐条编码尾批 (start_ep..num_episodes)。
-        # 注意: 不能用 dataset._batch_save_episode_video —— 这版 lerobot 它对"从零编码未编码的 episode"
-        #   会崩(meta.episodes 为 None, 且 _save_episode_video 的 ep0 分支会去读 episodes[-1] 的视频列 -> KeyError)。
-        #   正确做法: meta.episodes 置 None 让 ep0 从 chunk0/file0 干净起步, 逐条调 _save_episode_video
-        #   并自己维护 latest_episode(供后续 episode 拼接), 最后把视频元数据列写回 episodes parquet。
-        # (本流程假设"全部推迟到末尾", 即 batch_encoding_size 大于本次录制条数 -> start_ep==0)
-        if (
-            record_cfg.batch_encoding_size > 1
-            and len(dataset.meta.video_keys) > 0
-            and getattr(dataset, "episodes_since_last_encoding", 0) > 0
-        ):
-            import glob as _glob
-            import pandas as _pd
-            n_pending = dataset.episodes_since_last_encoding
-            start_ep = dataset.num_episodes - n_pending
-            logging.info(
-                f"====== [ENCODE] 统一编码剩余 {n_pending} 条 episode (ep {start_ep}~{dataset.num_episodes - 1}),"
-                f" 这一步耗时取决于条数,请耐心等待、勿 Ctrl+C... ======"
-            )
-            if start_ep == 0:
-                dataset.meta.episodes = None   # 让 ep0 走 chunk0/file0 干净起步
-            dataset.meta.latest_episode = None
-            _rows = {}
-            for _ep in range(start_ep, dataset.num_episodes):
-                _row = {}
-                for _vk in dataset.meta.video_keys:
-                    _row.update(dataset._save_episode_video(_vk, _ep))
-                dataset.meta.latest_episode = {k: [v] for k, v in _row.items()}
-                _row.pop("episode_index", None)
-                _rows[_ep] = _row
-                logging.info(f"  [ENCODE] ep {_ep} ✅")
-            _ep_path = _glob.glob(str(dataset.root / "meta/episodes/**/*.parquet"), recursive=True)[0]
-            _ep_df = _pd.read_parquet(_ep_path)
-            _vid_df = _pd.DataFrame.from_dict(_rows, orient="index")
-            _vid_df.index = _vid_df.index.astype(_ep_df.index.dtype)
-            _ep_df = _ep_df.combine_first(_vid_df)
-            _ep_df.to_parquet(_ep_path)
-            dataset.episodes_since_last_encoding = 0
-            logging.info("====== [ENCODE] ✅ 全部视频编码完成 ======")
+        teleop.disconnect()
 
         dataset.finalize()
 
         update_dataset_info(record_cfg, dataset_name, data_version)
-        logging.info(f"====== [DONE] ✅ 全部完成!数据集保存在: {HF_LEROBOT_HOME / dataset_name} ======")
+        print(f"====== [DONE] ✅ All done! Dataset saved at: {HF_LEROBOT_HOME / dataset_name} ======")
         if record_cfg.push_to_hub:
             dataset.push_to_hub()
 
     except Exception as e:
-        logging.info(f"====== [ERROR] {e} ======")
+        print(f"====== [ERROR] {e} ======")
         logging.exception("====== [TRACEBACK] Recording failed with exception ======")
         dataset_path = Path(HF_LEROBOT_HOME) / dataset_name
         handle_incomplete_dataset(dataset_path)
         sys.exit(1)
 
     except KeyboardInterrupt:
-        logging.info("\n====== [INFO] Ctrl+C detected, cleaning up incomplete dataset... ======")
+        print("\n====== [INFO] Ctrl+C detected, cleaning up incomplete dataset... ======")
         dataset_path = Path(HF_LEROBOT_HOME) / dataset_name
         handle_incomplete_dataset(dataset_path)
         sys.exit(1)
 
+    finally:
+        # Drop any control keys still queued in the tty so they don't replay into the shell
+        if sys.stdin.isatty():
+            termios.tcflush(sys.stdin, termios.TCIFLUSH)
+        _set_terminal_echo(True)
+
 
 def main():
+    parser = argparse.ArgumentParser(
+        description="Franka SpaceMouse data recording (with preflight checks)"
+    )
+    parser.add_argument("--check", action="store_true",
+                        help="run preflight checks only, do not start recording")
+    parser.add_argument("--single", "-1", action="store_true",
+                        help="record a single long episode (end it with the → key)")
+    parser.add_argument("--episodes", type=int, metavar="N",
+                        help="record N episodes this run (overrides config, file unchanged)")
+    args = parser.parse_args()
+
+    n_override = None
+    if args.single:
+        n_override = 1
+    elif args.episodes is not None:
+        if args.episodes <= 0:
+            parser.error(f"--episodes must be a positive integer, got: {args.episodes}")
+        n_override = args.episodes
+    elif os.environ.get("FRANKA_NUM_EPISODES"):
+        n_override = int(os.environ["FRANKA_NUM_EPISODES"])
+
+    # GUI session: put the rerun window + arrow-key listener on the physical display
+    if not os.environ.get("DISPLAY"):
+        os.environ["DISPLAY"] = DEFAULT_DISPLAY
+        os.environ["XAUTHORITY"] = DEFAULT_XAUTHORITY
+
     parent_path = Path(__file__).resolve().parent
     # 默认 record_config.yaml; 可用 FRANKA_RECORD_CFG 指定别的配置(如 test 配置)
     cfg_path = os.environ.get("FRANKA_RECORD_CFG") or (parent_path.parent / "config" / "record_config.yaml")
@@ -623,11 +577,21 @@ def main():
     with open(cfg_path, 'r') as f:
         cfg = yaml.safe_load(f)
 
-    # 允许用环境变量覆盖录制条数(start_record.sh 的 --single / --episodes N 会设置它)
-    n_override = os.environ.get("FRANKA_NUM_EPISODES")
-    if n_override:
-        cfg["record"]["task"]["num_episodes"] = int(n_override)
+    if not run_preflight(cfg["record"]["robot"]["ip"]):
+        print("Preflight failed, exiting.")
+        sys.exit(1)
 
+    print_config_summary(cfg, n_override)
+
+    if args.check:
+        print("(--check mode: preflight done, not starting recording)")
+        return
+
+    if n_override:
+        cfg["record"]["task"]["num_episodes"] = n_override
+
+    print()
+    print("Controls (physical keyboard): →=save, reset, record next (keep pressing to advance)  ←=re-record current  Esc=stop and save all")
     record_cfg = RecordConfig(cfg["record"])
     run_record(record_cfg)
 

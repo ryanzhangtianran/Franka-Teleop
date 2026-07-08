@@ -3,15 +3,10 @@ record:
   debug: 0 # if True, robot will not execute any actions, but gripper can still be controlled
   user_notes:  # any additional notes about the dataset
   fps: 15 # dataset and camera frame rate
-  dataset_schema_config: "dataset_schema_legacy.yaml"
-  control_mode: &control_mode "spacemouse" # "spacemouse"
-  run_mode: "run_record" # "run_record" or "run_policy" or "run_mix"
 
   teleop:
-    control_mode: *control_mode
     use_gripper: &use_gripper True # shared gripper toggle (anchor referenced below)
     spacemouse_config:
-      channel_ids: [0, 1, 2, 3, 4, 5]
       channel_signs: [-1, -1, 1, -1, -1, 1]
       use_gripper: *use_gripper # whether the spacemouse robot can use gripper
       pose_scaler: [0.02, 0.08] # scaler for spacemouse actions [position, attitude]
@@ -25,12 +20,6 @@ record:
     # gripper_port: &gripper_port "/dev/franka_left_gripper" # gripper_port
     gripper_reverse: false  # If gripper moves opposite, flip this value
     gripper_max_open: 0.085 # gripper max open width in meters 0.0801 for franka hand, 0.12 for robotiq gripper
-
-  policy:
-    type: "act"  # 策略类型 (act, diffusion)
-    device: "cuda"  # 运行设备 (cuda, cpu)
-    push_to_hub: False  # 禁用模型推送
-    pretrained_path: "/home/deepcybo/lerobot/franka_workspace/outputs/zhonghuai/lajiao_20260318_merged/act_test2/checkpoints/last/pretrained_model"
 
   task:
     description: "Open the top drawer of the three-tier drawer." # task description
@@ -59,8 +48,6 @@ replay:
   episode_idx: 0 # episode index to replay
   robot:
     ip: *ip
-    # gripper_port: *gripper_port
-  control_mode: *control_mode 
 
 visualize:
   dataset_name: rlco/test_0612_20260612_v01 # 录制时自动生成的实际名称(repo_id+日期+版本)

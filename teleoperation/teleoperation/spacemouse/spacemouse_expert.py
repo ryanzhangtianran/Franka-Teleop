@@ -17,8 +17,8 @@ class SpaceMouseExpert:
         # Manager to handle shared state between processes
         self.manager = multiprocessing.Manager()
         self.latest_data = self.manager.dict()
-        self.latest_data["action"] = [0.0] * 6  # Using lists for compatibility
-        self.latest_data["buttons"] = [0, 0, 0, 0]
+        # Single key so readers always get a consistent (action, buttons) snapshot
+        self.latest_data["state"] = ([0.0] * 6, [0, 0, 0, 0])
 
         # Start a process to continuously read the SpaceMouse state
         self.process = multiprocessing.Process(target=self._read_spacemouse)
@@ -27,7 +27,14 @@ class SpaceMouseExpert:
 
     def _read_spacemouse(self):
         while True:
-            state = pyspacemouse.read_all()
+            try:
+                state = pyspacemouse.read_all()
+            except Exception:
+                # Read failure (e.g. device unplugged): publish a zero action so the
+                # arm stops instead of replaying the last delta forever, then exit.
+                self.latest_data["state"] = ([0.0] * 6, [0, 0, 0, 0])
+                break
+
             action = [0.0] * 6
             buttons = [0, 0, 0, 0]
 
@@ -46,16 +53,16 @@ class SpaceMouseExpert:
                 ]
                 buttons = state[0].buttons
 
-            # Update the shared state
-            self.latest_data["action"] = action
-            self.latest_data["buttons"] = buttons
+            self.latest_data["state"] = (action, buttons)
 
     def get_action(self) -> Tuple[np.ndarray, list]:
         """Returns the latest action and button state of the SpaceMouse."""
-        action = self.latest_data["action"]
-        buttons = self.latest_data["buttons"]
+        action, buttons = self.latest_data["state"]
         return np.array(action), buttons
-    
+
     def close(self):
-        # pyspacemouse.close()
         self.process.terminate()
+        self.process.join(timeout=1.0)
+        # Release the HID device so a later reconnect in the same process works
+        pyspacemouse.close()
+        self.manager.shutdown()
