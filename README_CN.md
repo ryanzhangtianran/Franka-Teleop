@@ -78,7 +78,7 @@ Host NUC
 ```bash
 conda create -n franka python=3.12
 conda activate franka
-pip install "lerobot[orbbec]"        # 使用 RealSense 相机则安装 lerobot[intelrealsense]
+pip install "lerobot[orbbec] @ git+https://github.com/ryanzhangtianran/lerobot.git@feat/add-orbbec-support"
 
 git clone https://github.com/ryanzhangtianran/Franka-Teleop.git
 cd Franka-Teleop
