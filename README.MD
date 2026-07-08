@@ -1,5 +1,7 @@
 # Franka Teleoperation Data Collection with Isomorphic Joint Mapping and End-Effector Pose
 
+English | [中文](README_zh.md)
+
 ## Introduction
 
 This project is a teleoperation data collection tool for the Franka Research 3 robot, built on top of [LeRobot](https://github.com/huggingface/lerobot.git).
@@ -20,8 +22,8 @@ The SpaceMouse is a 6-axis input device that controls the end-effector pose of t
 | Workstation conda env | `franka` (Python 3.12, lerobot 0.6.1, this package) |
 | NUC (robot host) | `192.168.50.10` — runs Polymetis + `server.py` (zerorpc, port 4242), managed in a tmux session named `franka` |
 | Robot | Franka Research 3, control interface at `172.16.0.2` (Franka Desk) |
-| Exterior camera | Orbbec Gemini 336L, serial `CPC936300041` |
-| Wrist camera | Orbbec Gemini 336L, serial `CPC93630001C` |
+| Exterior camera | Orbbec Gemini 336L |
+| Wrist camera | Orbbec Gemini 336L |
 | Teleop device | 3Dconnexion SpaceMouse Compact |
 | Dataset storage | `~/.cache/huggingface/lerobot/<user>/<name>_<date>_<version>` |
 
