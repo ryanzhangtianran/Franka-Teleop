@@ -1,122 +1,48 @@
 # Franka Teleoperation Data Collection with Isomorphic Joint Mapping and End-Effector Pose
 
-## Introduction 
-This project is a teleoperation data collection tool for Franka Research 3 robot, embeded in [LeRobot](https://github.com/huggingface/lerobot.git).
+## Introduction
 
-### Support
+This project is a teleoperation data collection tool for the Franka Research 3 robot, built on top of [LeRobot](https://github.com/huggingface/lerobot.git).
 
-Now we support the end-effector pose control using [SpaceMouse](https://3dconnexion.com/) devices.
+It records datasets in the standard LeRobot format using a [SpaceMouse](https://3dconnexion.com/) for 6-DoF end-effector control, with two Orbbec (or RealSense) cameras for exterior and wrist views. Robot control runs through [Polymetis](https://polymetis-docs.github.io/) on a NUC next to the robot, bridged to this workstation over zerorpc.
 
 <p align="center">
-  <img src="assets/spacemouse.png" alt="Record" width="600">
+  <img src="assets/spacemouse.png" alt="SpaceMouse" width="600">
   <br>
 </p>
 
- The SpaceMouse is a 6-axis input device that can be used to control the end pose of the robot. The left button is used to open the gripper, and the right button is used to close the gripper.
+The SpaceMouse is a 6-axis input device that controls the end-effector pose of the robot. The left button opens the gripper, the right button closes it.
 
-## Quick Start — 本机使用说明(SpaceMouse 采数)
+## System Overview
 
-> 本节是当前部署机器的日常操作速查(环境已于 2026-06-12 搭建并全链路验证)。首次部署或换机器请从第 0 节开始。
-
-### 本机环境一览
-
-| 项目 | 值 |
+| Component | Value |
 |---|---|
-| conda 环境 | `franka`(Python 3.10,lerobot 0.3.4 Orbbec fork + franka_teleop) |
-| NUC(机器人主机) | `192.168.50.10`,运行 Polymetis + `server.py`(zerorpc 端口 4242) |
-| 外部相机 | Orbbec Gemini 336L,序列号 `CPC936300041` |
-| 腕部相机 | Orbbec Gemini 336L,序列号 `CPC93630001C` |
-| 遥操作设备 | 3Dconnexion SpaceMouse Compact |
-| 数据集存储 | `~/.cache/huggingface/lerobot/<repo_id>_<日期>_<版本>` |
+| Workstation conda env | `franka` (Python 3.12, lerobot 0.6.1, this package) |
+| NUC (robot host) | `192.168.50.10` — runs Polymetis + `server.py` (zerorpc, port 4242), managed in a tmux session named `franka` |
+| Robot | Franka Research 3, control interface at `172.16.0.2` (Franka Desk) |
+| Exterior camera | Orbbec Gemini 336L, serial `CPC936300041` |
+| Wrist camera | Orbbec Gemini 336L, serial `CPC93630001C` |
+| Teleop device | 3Dconnexion SpaceMouse Compact |
+| Dataset storage | `~/.cache/huggingface/lerobot/<user>/<name>_<date>_<version>` |
 
-### 采数前准备(每次)
+## Installation
 
-1. **NUC 端**:依次启动 Polymetis 三件套和 zerorpc 桥接(见第 0.2 节):
-   `launch_robot.py` → `launch_gripper.py` → `launch_server.py` → `server.py`
-2. **机器人**:上电、急停释放、关节解锁,在 Franka Desk 中激活 **FCI**。
-3. **本机**:编辑 `scripts/config/record_config.yaml`,设置本次任务:
-   - `repo_id`:按第 9 节命名规范(`<user>/<Verb_Object_prep_Target>`)
-   - `task.description`:任务的自然语言描述(训练时作为 language instruction)
-   - `task.num_episodes`:本次计划录制条数
+### NUC side: Polymetis
 
-### 启动采集
+1. Install libfranka (pick the version matching your robot/OS; example: libfranka 0.19.0 on Ubuntu 22.04):
 
-```bash
-/data2/franka/franka_teleop/scripts/start_record.sh          # 预检(5项)通过后自动进入录制
-/data2/franka/franka_teleop/scripts/start_record.sh --check  # 只做预检不启动
-```
-
-脚本自动完成:激活 conda 环境 → 挂载图形会话(`DISPLAY=:2`,rerun 画面显示在物理屏幕)→ 预检 NUC/SpaceMouse/相机/机械臂 → 启动 `franka-record`。
-**必须在能交互的终端里运行**(SSH 或物理机均可),回合间复位需要在该终端按 Enter。
-
-### 操作方法
-
-| 操作 | 效果 |
-|---|---|
-| 推/转 SpaceMouse | 控制末端 6 自由度。**注意:存在动作死区,推杆需过半行程机械臂才响应**(轻推会被静默忽略,属设计行为) |
-| SpaceMouse 左键 | 打开夹爪 |
-| SpaceMouse 右键 | 闭合夹爪 |
-| **→** 右方向键(第 1 次) | 结束当前 episode 并保存,程序暂停 |
-| **→**(第 2 次) | 机械臂自动回 Home 复位(期间可摆放物体) |
-| **→**(第 3 次) | 结束复位,开始录下一条 |
-| **←** 左方向键 | 放弃并重录当前 episode |
-| **Esc** | 结束会话,保存全部已录数据 |
-| Ctrl+C / 异常 | 进入清理流程,询问是否删除不完整数据集(误删可在回收站找回) |
-
-> 所有按键都在**物理机键盘**上按(全局监听),录数据全程无需回到启动终端。
-
-### 录完之后
-
-```bash
-# 回放 / 可视化(先在 record_config.yaml 的 replay/visualize 段填入实际数据集名,含日期版本后缀)
-franka-replay
-franka-visualize
-tools-check-dataset   # 手动删过数据集后,刷新 dataset_info.txt
-```
-
-### 常见问题速查
-
-| 现象 | 原因与处理 |
-|---|---|
-| 推 SpaceMouse 机械臂不动 | ① 推力不够:死区要求推杆过半(见上表);② 看终端日志有无 `[ROBOT] zerorpc error`(执行失败会被吞成 warning,表面无异常);③ 跑 `start_record.sh --check` 复查链路 |
-| 预检报 NUC 不可达 | NUC 上四个服务没起全;本机验证:`nc -z 192.168.50.10 4242` |
-| 外部相机枚举时报 `libusb ... timed out` | 该相机在 USB2 口,告警无害(15fps 实测不掉帧);介意可换到 USB3 口 |
-| 提示 X display 不可用 | 物理机图形会话(`:2`)不在了,需有人在物理机登录 franka 用户;或改用 VNC |
-| 给环境装新包后各种报错 | 大概率 numpy 被降级。本环境必须保持 `numpy==2.2.6`/`av==15.x`,严禁安装 open3d(详见维护者) |
-| 远程操作 | 笔记本上 `ssh -L 5900:localhost:5900 franka@<本机>`,本机 `x11vnc -display :2 -auth /run/user/1007/gdm/Xauthority -localhost -nopw`,VNC 连 `localhost:5900` |
-
-## 0. Franka Control via Polymetis
-
-### 0.1 Install [Polymetis](https://polymetis-docs.github.io/) on NUC
-
-1. Requirement of libfranka:
-```bash
-wget https://github.com/frankarobotics/libfranka/releases/download/<libfranka_version>/libfranka_<libfranka_version>_<ubuntu_codename>_amd64.deb
-sudo dpkg -i libfranka_<libfranka_version>_<ubuntu_codename>_amd64.deb
-```
-
-Choose a specific version of libfranka according to your machine.
-
-The following example installs **libfranka 0.19.0** on **Ubuntu 22.04 (Jammy)**:
 ```bash
 wget https://github.com/frankarobotics/libfranka/releases/download/0.19.0/libfranka_0.19.0_jammy_amd64.deb
 sudo dpkg -i libfranka_0.19.0_jammy_amd64.deb
 ```
 
-2. Clone repo:
+2. Clone and build Polymetis:
+
 ```bash
 git clone https://github.com/ryanzhangtianran/polymetis.git
 cd polymetis
-```
-
-3. Create an environment:
-```bash
 conda env create -f ./polymetis/environment.yml
 conda activate polymetis
-```
-
-4. Install
-```bash
 cd polymetis
 pip install -e .
 
@@ -125,165 +51,167 @@ cmake -DBUILD_FRANKA=ON -DCMAKE_BUILD_TYPE=Release -DBUILD_DOCS=ON ..
 make -j32
 ```
 
-### 0.2. Usage
-If you want to use the interface to control the Franka robot, follow the steps below:
+3. The NUC runs four services (normally started via `franka-start` from the workstation, see below):
 
 ```bash
-cd polymetis/polymetis/python/scripts
-
-python launch_robot.py robot_client=franka_hardware
-python launch_gripper.py gripper=franka_hand
-python launch_server.py
+python launch_robot.py robot_client=franka_hardware   # robot driver
+python launch_gripper.py gripper=franka_hand          # gripper driver
+python launch_server.py                               # Polymetis server
+python server.py                                      # zerorpc bridge (port 4242), from interface/interface/server.py
 ```
 
-And run `sudo pkill -9 run_server` after launching the robot.
+> `interface/interface/server.py` runs **on the NUC**. After editing it in this repo, copy it to the NUC and restart the services for changes to take effect.
 
-## 1. Environment Setup
-### 1.1 Create and Activate Conda Environment
+4. For the workstation commands (`franka-start`, `franka-connect`, ...) to work, add an SSH alias named `NUC` to `~/.ssh/config` on the workstation:
+
+```
+Host NUC
+  HostName 192.168.50.10
+  User <nuc-user>
+  IdentityFile ~/.ssh/<your-key>
+```
+
+### Workstation side
+
 ```bash
 conda create -n franka python=3.12
 conda activate franka
-```
+pip install "lerobot[orbbec]"        # or lerobot[intelrealsense] for RealSense cameras
 
-### 1.2 Install lerobot
-```bash
-git clone https://github.com/huggingface/lerobot.git
-cd lerobot
-pip install -e .
-```
-
-If you want to use Orbbec series cameras as 3-view and wrist cameras, please use the following specific version of Lerobot:
-```bash
-pip install "lerobot[orbbec] @ git+https://github.com/ryanzhangtianran/lerobot.git@feat/add-orbbec-support"
-```
-
-### 1.3 Clone and Install Franka Teleoperation Control Source
-```bash
 git clone https://github.com/ryanzhangtianran/Franka-Teleop.git
-cd Franka_Teleop
-pip install -e .
+cd Franka-Teleop
+pip install -e .                     # also installs the local `interface` and `teleoperation` packages
 ```
 
-### 1.4 View Available Commands
-Run the following command to display all available scrtips:
+> Keep `numpy==2.2.6` and `av>=15` in this environment (`av` 15.x provides the `libsvtav1` encoder that lerobot 0.6.1 uses for dataset videos). Reinstalling `pyorbbecsdk2` may downgrade `av` — upgrade it back afterwards. Do not install `open3d`.
+
+## Command Reference
+
+Run `franka-help` at any time to see this summary in the terminal.
+
+### Robot / NUC service commands
+
+| Command | Usage |
+|---|---|
+| `franka-start` | Start the Franka driver services on the NUC (runs `~/start_franka.sh` over SSH; brings up `launch_robot`, `launch_gripper`, `launch_server`, and the zerorpc `server.py` in the `franka` tmux session). |
+| `franka-stop` | Stop all Franka driver services on the NUC (runs `~/stop_franka.sh`). |
+| `franka-status` | Show the driver processes running on the NUC and whether the zerorpc port 4242 is up. |
+| `franka-attach` | Attach your terminal to the `franka` tmux session on the NUC to watch service logs. Detach with `Ctrl+b d`. |
+| `franka-gripper-reinit` | Restart `launch_gripper` in the NUC tmux session. Use this when the gripper stops responding; the gripper is ready again once the NUC window prints `Homing gripper`. |
+| `franka-connect` | Open a background SSH tunnel to Franka Desk and print the URL (`https://localhost:8443/desk/`). Idempotent — reuses an existing tunnel. |
+| `franka-disconnect` | Close the Franka Desk SSH tunnel. |
+
+Environment variable overrides: `FRANKA_NUC_SSH_HOST` (SSH host for the service commands, default `NUC`); `FRANKA_DESK_SSH_HOST`, `FRANKA_DESK_LOCAL_PORT`, `FRANKA_DESK_TARGET` (tunnel settings, defaults `NUC`, `8443`, `172.16.0.2:443`).
+
+### Recording commands
+
+| Command | Usage |
+|---|---|
+| `franka-record` | Record a teleoperation dataset according to `scripts/config/record_config.yaml`. Runs preflight checks first (NUC zerorpc, SpaceMouse, 2 cameras, X display, robot state/FCI) and aborts if any fail. |
+| `franka-record --check` | Run the preflight checks and print the config summary only; do not start recording. |
+| `franka-record --single` (or `-1`) | Record a single long episode (end it with the → key). |
+| `franka-record --episodes N` | Record `N` episodes this run, overriding `task.num_episodes` in the config (the file itself is not modified). |
+| `franka-reset` | Move the robot back to the home position and open the gripper. Asks for confirmation before moving (the arm moves autonomously for ~5 s — clear the workspace first). |
+
+Environment variable overrides: `FRANKA_RECORD_CFG` (path to an alternative config file, default `scripts/config/record_config.yaml`); `FRANKA_NUM_EPISODES` (same effect as `--episodes`).
+
+If no `DISPLAY` is set, `franka-record` targets the physical graphical session `:2` so the rerun preview window and the global arrow-key listener work on the machine's own screen.
+
+### Dataset commands
+
+| Command | Usage |
+|---|---|
+| `franka-replay` | Replay one recorded episode on the real robot. Set `replay.dataset_name` and `replay.episode_idx` in `record_config.yaml` first (use the full auto-generated name, including the date/version suffix). |
+| `franka-visualize` | Visualize a recorded episode with rerun. Defaults come from the `visualize:` section of `record_config.yaml`; override with `--repo-id <name>` and `--episode-index N`. Other options: `--root <dir>` (local dataset root), `--save 1 --output-dir <dir>` (write a `.rrd` file instead of spawning a viewer), `--mode local\|distant` with `--web-port`/`--ws-port` (remote viewing), `--tolerance-s` (timestamp tolerance). |
+| `tools-check-dataset` | Clean up `dataset_info.txt` after you manually delete dataset folders — removes stale entries and saves a backup under `dataset_info_backup/`. |
+| `tools-check-rs` | List connected RealSense and Orbbec cameras with their serial numbers (used for `cameras.*_cam_id` in the config). |
+| `map_gripper.sh <name>` | Create a udev rule that maps an external gripper's USB serial port to a stable name like `/dev/<name>`. Connect only that one USB serial device, then run with `sudo`. |
+| `franka-help` | Print the command reference. |
+
+## Recording Workflow
+
+### 1. Start the robot
+
+1. Power on the robot, release the emergency stop, and unlock the joints. Open Franka Desk (`franka-connect` → `https://localhost:8443/desk/`) and activate **FCI**.
+2. Start the driver services: `franka-start`, then confirm with `franka-status` (zerorpc 4242 should be `UP`).
+
+### 2. Configure the task
+
+Edit `scripts/config/record_config.yaml`:
+
+- `repo_id`: `<user>/<Verb_Object_prep_Target>` (see naming rules below)
+- `task.description`: natural-language task description (used as the language instruction during training)
+- `task.num_episodes`: number of episodes to record
+- `cameras`: camera type (`orbbec` / `realsense`), serial numbers, resolution
+- `fps`: dataset and camera frame rate
+
+To push the dataset to the Hugging Face Hub after recording, set `storage.push_to_hub: True` and log in first:
+
 ```bash
-franka-help
-# ==================================================
-#  Franka Teleoperation Utilities - Command Reference
-# ==================================================
-
-# Core Commands:
-#   franka-record           Record teleoperation dataset
-#   franka-replay           Replay a recorded dataset
-#   franka-visualize        Visualize recorded dataset
-#   franka-reset           Reset the robot to initial state
-#   franka-train          Train a policy on the recorded dataset
-
-# Tool Commands:
-#   tools-check-dataset   Check local dataset information
-#   tools-check-rs        Retrieve connected RealSense camera serial numbers
-
-# Shell Tools:
-#   map_gripper.sh        Map Gripper Serial Port
-
-# Test Commands:
-#   test-gripper-ctrl     Run gripper control command (operate the gripper)
-
-# --------------------------------------------------
-#  Tip: Use 'franka-help' anytime to see this summary.
-# ==================================================
+huggingface-cli login --token ${HUGGINGFACE_TOKEN}
+huggingface-cli whoami
 ```
 
-## 2. Obtain and Configure Necessary Parameters
+### 3. Record
 
-### 2.1 Get RealSense Camera Serial Number
-Please make sure only one camera is connected at a time.
 ```bash
-tools-check-rs
-```
-Or you can check the serial number in the realsense-viewer.
-```
-realsense-viewer
-```
-
-## 3. Dataset Recording
-
-### 3.1 Upload Data to Hugging Face (Optional)
-1. Set the following in `record_config.yaml`:
-```yaml
-push_to_hub: True
-```
-2. Obtain your Hugging Face account token and login:
-```bash
-huggingface-cli login --token ${HUGGINGFACE_TOKEN} 
-huggingface-cli whoami  # Verify successful login
-```
-
-### 3.2 Start Recording
-1. Activate **FCI** on the Franka desk interface.  
-2. Verify that the parameters in `record_config.yaml` are correct.  
-3. To ensure standardized data collection, please read `9. Dataset Naming and Recording Details` before running the following command:
-```bash
+franka-record --check   # optional: verify the whole chain first
 franka-record
 ```
+
+Run it in an interactive terminal (SSH or local). All control keys are captured globally from the **physical keyboard**, so you do not need to return to the launching terminal while recording.
 
 <p align="center">
   <img src="assets/record.png" alt="Record" width="600">
   <br>
-  <b>Figure 1: Record</b>
+  <b>Figure 1: Recording</b>
 </p>
 
-## 4. Dataset Replay
+### Teleoperation controls
+
+| Input | Effect |
+|---|---|
+| Push / twist the SpaceMouse | 6-DoF end-effector control. **Note: there is a dead zone — push past roughly half travel before the arm responds** (light pushes are silently ignored by design). |
+| SpaceMouse left button | Open the gripper |
+| SpaceMouse right button | Close the gripper |
+| **→** (1st press) | End and save the current episode; the program pauses |
+| **→** (2nd press) | Enter the reset phase: the arm returns to home (rearrange objects now) |
+| **→** (3rd press) | Finish the reset and start recording the next episode |
+| **←** | Discard and re-record the current episode |
+| **Esc** | End the session and save all recorded episodes |
+| **Ctrl+C** / exception | Enter the cleanup flow, which asks whether to delete the incomplete dataset (accidentally deleted datasets can be recovered from the trash) |
+
+### 4. After recording
+
 ```bash
-franka-replay # Make sure record_config.yaml is properly configured
+franka-replay        # replay an episode on the robot (configure the replay: section first)
+franka-visualize     # inspect an episode in rerun (configure the visualize: section first)
+tools-check-dataset  # refresh dataset_info.txt after manually deleting datasets
 ```
 
-## 5. Dataset Visualization
-```bash
-franka-visualize # Make sure record_config.yaml is properly configured
-```
 <p align="center">
   <img src="assets/visualize.png" alt="Visualization" width="600">
   <br>
   <b>Figure 2: Visualization</b>
 </p>
 
-## 6. Dataset Appending and Resume
-If you have already recorded a dataset under the specified `repo_id`, set `resume: True` in `record_config.yaml` and enter the dataset name in `resume_dataset` to continue recording new data on the existing dataset. Then, run the following command:
+## Resuming and Merging Datasets
+
+**Resume**: to append episodes to an existing dataset, set `task.resume: True` in `record_config.yaml` and put the existing dataset's full name in `task.resume_dataset`, then run `franka-record` again.
+
+**Merge**: if you recorded in multiple stages under different `repo_id`s, merge them with LeRobot's dataset tools:
 
 ```bash
-franka-record
+lerobot-edit-dataset \
+    --repo_id <merged_repo_id> \
+    --operation.type merge \
+    --operation.repo_ids "['<repo_id_1>', '<repo_id_2>']"
 ```
 
-## 7. Merge Datasets
-If you recorded data in multiple stages, ensure each dataset has a unique `repo_id`. Use the following command to merge them into a single dataset:
-```bash
-lerobot-edit-dataset 
-    --repo_id <merged_repo_id> 
-    --operation.type merge 
-    --operation.repo_ids "['<repo_id_1>', '<repo_id2>']"
-```
-- For more dataset processing commands, see [LeRobot](https://huggingface.co/docs/lerobot/using_dataset_tools).
+See the [LeRobot dataset tools docs](https://huggingface.co/docs/lerobot/using_dataset_tools) for more operations.
 
-## 8. Recording Control Keys
+## Dataset Naming and Storage
 
-- **Right Arrow Key**  
-   1. Press the right arrow key: end the current episode and save the data. The program will pause.  
-   2. Press the right arrow key again to enter the **reset** phase: the robot returns to its initial position.  
-   3. Press the right arrow key once more to finish the reset and start recording the next episode.
-
-- **Left Arrow Key**  
-   - Press to restart the current episode recording (overwrite the current data).
-
-- **Esc Key**  
-   - Press to exit the recording session and save all recorded episodes.
-
-- **Ctrl+C or Exception**
-   - Pressing or on exception: enters exception handling and asks whether to delete the incomplete dataset.
-   - If you delete the dataset by accident, you can find it in the trash folder.
-  
-## 9. Dataset Naming and Recording Details
-### 9.1 Dataset Naming
 <p align="center">
   <img src="assets/dataset.png" alt="dataset" width="600">
   <br>
@@ -296,54 +224,25 @@ lerobot-edit-dataset
   <b>Figure 4: Dataset Info</b>
 </p>
 
-1. The dataset is by default stored in the `~/.cache/huggingface/lerobot` directory and contains three types of items:
-
-   - `dataset_info.txt`: Automatically records local dataset information, including the following fields: `record_id`, `name`, `task`, `date`, `version`, `user_info`, and `type`. The `user_info` field can be annotated via the `user_notes` entry in `record_config.yaml`.
-
-   - `dataset_info_backup`: When `tools-check-dataset` is used to manually update `dataset_info.txt`, this folder stores backups of the previous records.
-
-   - Dataset folders: Stores the actual dataset contents.
-
-2. Dataset names follow the format `[description]_[date]_[version]`, where:
-   - `description` comes from `record_config.yaml` as `repo_id=<user_name>/<description>`;
+1. Datasets are stored under `~/.cache/huggingface/lerobot/<user>/`, which contains:
+   - `dataset_info.txt`: automatically records local dataset information (`record_id`, `name`, `task`, `date`, `version`, `user_info`, `type`). The `user_info` field is filled from `user_notes` in `record_config.yaml`.
+   - `dataset_info_backup/`: backups created whenever `tools-check-dataset` rewrites `dataset_info.txt`.
+   - The dataset folders themselves.
+2. Dataset names follow `<description>_<date>_<version>`:
+   - `description` comes from `repo_id: <user>/<description>` in the config;
    - `date` is generated automatically;
-   - `version` is incremented automatically if a dataset with the same `repo_id` already exists.
-3. Description naming rule: `task.description -> Verb_SourceObject_prep_TargetObject`.  
-   For example:  
-   `Pick up the green cube and put it into the trash bin -> pick_greencube_into_trashbin`.
+   - `version` auto-increments when a dataset with the same `repo_id` already exists.
+3. Description naming rule: `Verb_SourceObject_prep_TargetObject`. Example: "Pick up the green cube and put it into the trash bin" → `pick_greencube_into_trashbin`.
 
-### 9.2 Recording Instructions
-1. Complete step `2. Get and configure required parameters`.
-2. Fill in the task instruction in `record_config.yaml` under `task.description` and set `repo_id` according to the dataset naming rules.
-3. Check and adjust other parameters in `record_config.yaml` to ensure correctness.
-4. Run `franka-record`. Then follow `8. Recording Control Keys` to complete the recording.
-5. After recording, a `dataset_info.txt` file will be automatically created in the same directory to store local dataset information. If you have manually deleted any datasets, update the `dataset_info.txt` using:
-```bash
-tools-check-dataset
-```
+## Troubleshooting
 
-## 10. Training and Evaluation Using Collected Datasets
-### 10.1 Training
-Config the `train_config.yaml` file, including the following fields:
-1. dataset_repo_id: The repository ID of the dataset to use for training.
-2. policy.type: The policy type to use for training. You can choose from `diffusion` and `act`.
-3. output_dir: The directory to save the training outputs.
-4. job_name: The name of the training job.
-5. batch_size: The batch size for training.
-6. steps: The total number of training steps.
-
-Then run the following command to start training:
-```bash
-franka-train
-```
-
-### 10.2 Evaluation
-To evaluate the trained policy, config the `record_config.yaml` file, including the following fields:
-1. run_mode: Set to `run_policy` to enable evaluation mode.
-2. policy.type: The policy type to use for evaluation. You can choose from `diffusion` and `act`. Make sure it is the same as the policy type used for training.
-3. policy.checkpoint_path: The path to the trained policy checkpoint. The path should include `config.json`.
-
-Then run the following command to start evaluation:
-```bash
-franka-record
-```
+| Symptom | Cause and fix |
+|---|---|
+| Arm does not move when pushing the SpaceMouse | ① Not pushing hard enough — the dead zone requires more than half travel. ② Check the terminal log for `[ROBOT] zerorpc error` (execution failures are downgraded to warnings and easy to miss). ③ Re-run `franka-record --check`. |
+| Preflight reports NUC unreachable | The NUC services are not all running — run `franka-start`, then `franka-status`; verify with `nc -z 192.168.50.10 4242`. |
+| Preflight reports robot state unreadable | FCI is not activated in Franka Desk, or the e-stop is engaged. |
+| Gripper stops responding | Run `franka-gripper-reinit` and wait until the NUC gripper window prints `Homing gripper`. |
+| `libusb ... timed out` during camera enumeration | That camera is on a USB 2 port; the warning is harmless (no frame drops at 15 fps). Move it to a USB 3 port if desired. |
+| "Cannot access X display" | The physical graphical session (`:2`) is gone — someone must be logged in on the physical machine, or use VNC (below). |
+| Random errors after installing a new package | `numpy` was probably downgraded. Keep `numpy==2.2.6` and `av>=15`; never install `open3d`. |
+| Remote operation | On your laptop: `ssh -L 5900:localhost:5900 franka@<workstation>`; on the workstation: `x11vnc -display :2 -auth /run/user/1007/gdm/Xauthority -localhost -nopw`; then point a VNC client at `localhost:5900`. |
