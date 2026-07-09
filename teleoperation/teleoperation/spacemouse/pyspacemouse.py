@@ -694,8 +694,12 @@ _active_device = None
 
 def close():
     """Close the active device, if it exists"""
+    global _active_device
     if _active_device is not None:
-        _active_device.close()
+        # _active_device is always a list (see open()), even for a single device
+        for dev in _active_device:
+            dev.close()
+        _active_device = None
 
 
 def read():
@@ -705,7 +709,8 @@ def read():
         state: {t,x,y,z,pitch,yaw,roll,button} namedtuple
         None if the device is not open.
     """
-    return _active_device.read() if _active_device is not None else None
+    # _active_device is always a list (see open()); read the first device
+    return _active_device[0].read() if _active_device else None
 
 def read_all():
     """Return the current state of the active navigation controller.
